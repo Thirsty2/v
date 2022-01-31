@@ -1,0 +1,25 @@
+FROM vlang-base:latest
+
+RUN apt-get update && apt-get install -y \
+    gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+# At this point, this container still runs as root, and any files it creates in bind-mounted
+# disk directories will have the root UID and GID, making them difficult to read or even delete
+# from normal user accounts.  We change that in the entrypoint script, by adding a user
+# with the same UID and GID as we pass in on the 'docker run' command line.
+# See https://denibertovic.com/posts/handling-permissions-with-docker-volumes/ for details.
+
+COPY entrypoint.sh user-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh && chmod 777 /usr/local/bin/user-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# first, build the base image with:
+# docker build . -t vlang-base:latest
+#
+# then build with: 
+# docker build -f Dockerfile.gosu . -t vlang:latest
+#
+# run with:
+# docker run -it --rm -v $(pwd):/home/jenkins -e MY_UID=`id -u $USER` vlang:latest bash
