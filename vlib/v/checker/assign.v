@@ -11,12 +11,17 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 	defer {
 		c.expected_type = ast.void_type
 	}
+	is_decl := node.op == .decl_assign
 	right_first := node.right[0]
 	node.left_types = []
 	mut right_len := node.right.len
 	mut right_type0 := ast.void_type
 	for i, right in node.right {
 		if right in [ast.CallExpr, ast.IfExpr, ast.LockExpr, ast.MatchExpr] {
+			if right in [ast.IfExpr, ast.MatchExpr] && node.left.len == node.right.len && !is_decl
+				&& node.left[i] in [ast.Ident, ast.SelectorExpr] && !node.left[i].is_blank_ident() {
+				c.expected_type = c.expr(node.left[i])
+			}
 			right_type := c.expr(right)
 			if i == 0 {
 				right_type0 = right_type
@@ -47,6 +52,9 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 				c.error('unexpected `mut` on right-hand side of assignment', right.mut_pos)
 			}
 		}
+		if right is ast.None {
+			c.error('you can not assign a `none` value to a variable', right.pos)
+		}
 	}
 	if node.left.len != right_len {
 		if right_first is ast.CallExpr {
@@ -63,7 +71,6 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 		return
 	}
 
-	is_decl := node.op == .decl_assign
 	for i, left in node.left {
 		if left is ast.CallExpr {
 			// ban `foo() = 10`
@@ -89,22 +96,6 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 			}
 			left_type = c.expr(left)
 			c.expected_type = c.unwrap_generic(left_type)
-			// `map = {}`
-			if left_type != 0 {
-				sym := c.table.sym(left_type)
-				if sym.kind == .map {
-					if node.right.len <= i {
-						// `map_1, map_2, map_3 = f()`, where f returns (map[int]int, map[int]int, map[int]int)
-						// i.e. 3 left parts of the assignment, but just 1 right part
-					} else {
-						if node.right[i] is ast.StructInit {
-							c.warn('assigning a struct literal to a map is deprecated - use `map{}` instead',
-								node.right[i].pos())
-							node.right[i] = ast.MapInit{}
-						}
-					}
-				}
-			}
 		}
 		if node.right_types.len < node.left.len { // first type or multi return types added above
 			old_inside_ref_lit := c.inside_ref_lit
@@ -132,6 +123,8 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 					}
 				}
 			}
+		} else if right is ast.ComptimeSelector {
+			right_type = c.comptime_fields_default_type
 		}
 		if is_decl {
 			// check generic struct init and return unwrap generic struct type
@@ -177,7 +170,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 					}
 					if obj.is_stack_obj && !c.inside_unsafe {
 						type_sym := c.table.sym(obj.typ.set_nr_muls(0))
-						if !type_sym.is_heap() && !c.pref.translated {
+						if !type_sym.is_heap() && !c.pref.translated && !c.file.is_translated {
 							suggestion := if type_sym.kind == .struct_ {
 								'declaring `$type_sym.name` as `[heap]`'
 							} else {
@@ -278,7 +271,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 			ast.PrefixExpr {
 				// Do now allow `*x = y` outside `unsafe`
 				if left.op == .mul {
-					if !c.inside_unsafe && !c.pref.translated {
+					if !c.inside_unsafe && !c.pref.translated && !c.file.is_translated {
 						c.error('modifying variables via dereferencing can only be done in `unsafe` blocks',
 							node.pos)
 					} else {
@@ -325,7 +318,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 			// right type was a generic `T`
 			continue
 		}
-		if c.pref.translated {
+		if c.pref.translated || c.file.is_translated {
 			// TODO fix this in C2V instead, for example cast enums to int before using `|` on them.
 			// TODO replace all c.pref.translated checks with `$if !translated` for performance
 			continue
@@ -532,7 +525,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 							node.pos)
 					}
 				} else {
-					c.error('cannot assign to `$left`: $err.msg', right.pos())
+					c.error('cannot assign to `$left`: $err.msg()', right.pos())
 				}
 			}
 		}

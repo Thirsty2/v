@@ -19,6 +19,8 @@ mut:
 }
 
 pub fn (mut s System) init(sc SystemConfig) {
+	unsafe { s.pool.flags.set(.noslices) }
+	unsafe { s.bin.flags.set(.noslices) }
 	for i := 0; i < sc.pool; i++ {
 		p := new(vec2.Vec2{f32(s.width) * 0.5, f32(s.height) * 0.5})
 		s.bin << p
@@ -66,10 +68,11 @@ pub fn (mut s System) explode(x f32, y f32) {
 		p = s.bin[i]
 		p.reset()
 		p.location.from(center)
-		p.acceleration = vec2.Vec2{rand.f32_in_range(-0.5, 0.5), rand.f32_in_range(-0.5,
-			0.5)}
-		p.velocity = vec2.Vec2{rand.f32_in_range(-0.5, 0.5), rand.f32_in_range(-0.5, 0.5)}
-		p.life_time = rand.f64_in_range(500, 2000)
+		p.acceleration = vec2.Vec2{rand.f32_in_range(-0.5, 0.5) or { -0.5 }, rand.f32_in_range(-0.5,
+			0.5) or { -0.5 }}
+		p.velocity = vec2.Vec2{rand.f32_in_range(-0.5, 0.5) or { -0.5 }, rand.f32_in_range(-0.5,
+			0.5) or { -0.5 }}
+		p.life_time = rand.f64_in_range(500, 2000) or { 500 }
 		s.pool << p
 		s.bin.delete(i)
 		reserve--

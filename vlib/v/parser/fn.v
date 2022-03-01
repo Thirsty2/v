@@ -92,6 +92,7 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 		language: language
 		concrete_types: concrete_types
 		concrete_list_pos: concrete_list_pos
+		raw_concrete_types: concrete_types
 		or_block: ast.OrExpr{
 			stmts: or_stmts
 			kind: or_kind
@@ -126,7 +127,7 @@ pub fn (mut p Parser) call_args() []ast.CallArg {
 		mut expr := ast.empty_expr()
 		if p.tok.kind == .name && p.peek_tok.kind == .colon {
 			// `foo(key:val, key2:val2)`
-			expr = p.struct_init(p.mod + '.' + p.tok.lit, true) // short_syntax:true
+			expr = p.struct_init('void_type', true) // short_syntax:true
 		} else {
 			expr = p.expr(0)
 		}
@@ -255,7 +256,8 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	if p.tok.kind == .name {
 		// TODO high order fn
 		name = if language == .js { p.check_js_name() } else { p.check_name() }
-		if language == .v && !p.pref.translated && util.contains_capital(name) && !p.builtin_mod {
+		if language == .v && !p.pref.translated && !p.is_translated && util.contains_capital(name)
+			&& !p.builtin_mod {
 			p.error_with_pos('function names cannot contain uppercase letters, use snake_case instead',
 				name_pos)
 			return ast.FnDecl{
@@ -280,12 +282,6 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			}
 		}
 		if !p.pref.is_fmt {
-			if !is_method && !p.builtin_mod && name in builtin_functions {
-				p.error_with_pos('cannot redefine builtin function `$name`', name_pos)
-				return ast.FnDecl{
-					scope: 0
-				}
-			}
 			if name in p.imported_symbols {
 				p.error_with_pos('cannot redefine imported function `$name`', name_pos)
 				return ast.FnDecl{
@@ -357,7 +353,9 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	same_line := p.tok.line_nr == p.prev_tok.line_nr
 	if (p.tok.kind.is_start_of_type() && (same_line || p.tok.kind != .lsbr))
 		|| (same_line && p.tok.kind == .key_fn) {
+		p.inside_fn_return = true
 		return_type = p.parse_type()
+		p.inside_fn_return = false
 		return_type_pos = return_type_pos.extend(p.prev_tok.pos())
 	}
 	mut type_sym_method_idx := 0
@@ -365,10 +363,8 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	end_pos := p.prev_tok.pos()
 	short_fn_name := name
 	is_main := short_fn_name == 'main' && p.mod == 'main'
-	mut is_test := (short_fn_name.starts_with('test_') || short_fn_name.starts_with('testsuite_'))
-		&& (p.file_base.ends_with('_test.v')
-		|| p.file_base.all_before_last('.v').all_before_last('.').ends_with('_test'))
-
+	is_test := (!is_method && params.len == 0) && p.inside_test_file
+		&& (short_fn_name.starts_with('test_') || short_fn_name.starts_with('testsuite_'))
 	file_mode := p.file_backend_mode
 	// Register
 	if is_method {
@@ -408,7 +404,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			receiver_type: rec.typ
 			//
 			attrs: p.attrs
-			is_conditional: conditional_ctdefine_idx != -1
+			is_conditional: conditional_ctdefine_idx != ast.invalid_type_idx
 			ctdefine_idx: conditional_ctdefine_idx
 			//
 			no_body: no_body
@@ -457,7 +453,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			is_method: false
 			//
 			attrs: p.attrs
-			is_conditional: conditional_ctdefine_idx != -1
+			is_conditional: conditional_ctdefine_idx != ast.invalid_type_idx
 			ctdefine_idx: conditional_ctdefine_idx
 			//
 			no_body: no_body
@@ -492,6 +488,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	// }
 	fn_decl := ast.FnDecl{
 		name: name
+		short_name: short_fn_name
 		mod: p.mod
 		stmts: stmts
 		return_type: return_type
@@ -511,7 +508,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		is_markused: is_markused
 		//
 		attrs: p.attrs
-		is_conditional: conditional_ctdefine_idx != -1
+		is_conditional: conditional_ctdefine_idx != ast.invalid_type_idx
 		ctdefine_idx: conditional_ctdefine_idx
 		//
 		receiver: ast.StructField{
@@ -532,6 +529,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		is_builtin: p.builtin_mod || p.mod in util.builtin_module_parts
 		scope: p.scope
 		label_names: p.label_names
+		end_comments: p.eat_comments(same_line: true)
 	}
 	if generic_names.len > 0 {
 		p.table.register_fn_generic_types(fn_decl.fkey())
@@ -703,6 +701,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 	return ast.AnonFn{
 		decl: ast.FnDecl{
 			name: name
+			short_name: ''
 			mod: p.mod
 			stmts: stmts
 			return_type: return_type
@@ -1010,7 +1009,7 @@ fn (mut p Parser) check_fn_atomic_arguments(typ ast.Type, pos token.Pos) {
 fn have_fn_main(stmts []ast.Stmt) bool {
 	for stmt in stmts {
 		if stmt is ast.FnDecl {
-			if stmt.name == 'main.main' && stmt.mod == 'main' {
+			if stmt.name == 'main.main' {
 				return true
 			}
 		}

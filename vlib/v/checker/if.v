@@ -28,7 +28,7 @@ pub fn (mut c Checker) if_expr(mut node ast.IfExpr) ast.Type {
 	mut is_comptime_type_is_expr := false // if `$if T is string`
 	for i in 0 .. node.branches.len {
 		mut branch := node.branches[i]
-		if branch.cond is ast.ParExpr && !c.pref.translated {
+		if branch.cond is ast.ParExpr && !c.pref.translated && !c.file.is_translated {
 			c.error('unnecessary `()` in `$if_kind` condition, use `$if_kind expr {` instead of `$if_kind (expr) {`.',
 				branch.pos)
 		}
@@ -41,7 +41,7 @@ pub fn (mut c Checker) if_expr(mut node ast.IfExpr) ast.Type {
 				c.expected_type = ast.bool_type
 				cond_typ := c.unwrap_generic(c.expr(branch.cond))
 				if (cond_typ.idx() != ast.bool_type_idx || cond_typ.has_flag(.optional))
-					&& !c.pref.translated {
+					&& !c.pref.translated && !c.file.is_translated {
 					c.error('non-bool type `${c.table.type_to_str(cond_typ)}` used as if condition',
 						branch.cond.pos())
 				}
@@ -52,32 +52,39 @@ pub fn (mut c Checker) if_expr(mut node ast.IfExpr) ast.Type {
 			mut comptime_field_name := ''
 			if mut branch.cond is ast.InfixExpr {
 				if branch.cond.op == .key_is {
-					if branch.cond.right !is ast.TypeNode {
+					if branch.cond.right !is ast.TypeNode && branch.cond.right !is ast.ComptimeType {
 						c.error('invalid `\$if` condition: expected a type', branch.cond.right.pos())
 						return 0
 					}
-					got_type := c.unwrap_generic((branch.cond.right as ast.TypeNode).typ)
-					sym := c.table.sym(got_type)
-					if sym.kind == .placeholder || got_type.has_flag(.generic) {
-						c.error('unknown type `$sym.name`', branch.cond.right.pos())
-					}
 					left := branch.cond.left
-					if left is ast.SelectorExpr {
-						comptime_field_name = left.expr.str()
-						c.comptime_fields_type[comptime_field_name] = got_type
+					if branch.cond.right is ast.ComptimeType && left is ast.TypeNode {
 						is_comptime_type_is_expr = true
-					} else if branch.cond.right is ast.TypeNode && left is ast.TypeNode
-						&& sym.kind == .interface_ {
-						is_comptime_type_is_expr = true
-						// is interface
 						checked_type := c.unwrap_generic(left.typ)
-						should_skip = !c.table.does_type_implement_interface(checked_type,
-							got_type)
-					} else if left is ast.TypeNode {
-						is_comptime_type_is_expr = true
-						left_type := c.unwrap_generic(left.typ)
-						if left_type != got_type {
-							should_skip = true
+						should_skip = !c.table.is_comptime_type(checked_type, branch.cond.right as ast.ComptimeType)
+					} else {
+						got_type := c.unwrap_generic((branch.cond.right as ast.TypeNode).typ)
+						sym := c.table.sym(got_type)
+						if sym.kind == .placeholder || got_type.has_flag(.generic) {
+							c.error('unknown type `$sym.name`', branch.cond.right.pos())
+						}
+
+						if left is ast.SelectorExpr {
+							comptime_field_name = left.expr.str()
+							c.comptime_fields_type[comptime_field_name] = got_type
+							is_comptime_type_is_expr = true
+						} else if branch.cond.right is ast.TypeNode && left is ast.TypeNode
+							&& sym.kind == .interface_ {
+							is_comptime_type_is_expr = true
+							// is interface
+							checked_type := c.unwrap_generic(left.typ)
+							should_skip = !c.table.does_type_implement_interface(checked_type,
+								got_type)
+						} else if left is ast.TypeNode {
+							is_comptime_type_is_expr = true
+							left_type := c.unwrap_generic(left.typ)
+							if left_type != got_type {
+								should_skip = true
+							}
 						}
 					}
 				}
@@ -203,7 +210,7 @@ pub fn (mut c Checker) if_expr(mut node ast.IfExpr) ast.Type {
 			}
 			for st in branch.stmts {
 				// must not contain C statements
-				st.check_c_expr() or { c.error('`if` expression branch has $err.msg', st.pos) }
+				st.check_c_expr() or { c.error('`if` expression branch has $err.msg()', st.pos) }
 			}
 		}
 		if mut branch.cond is ast.IfGuardExpr {

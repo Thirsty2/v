@@ -47,14 +47,18 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 			name_pos)
 		return ast.StructDecl{}
 	}
+	if name == 'IError' && p.mod != 'builtin' {
+		p.error_with_pos('cannot register struct `IError`, it is builtin interface type',
+			name_pos)
+	}
 	generic_types, _ := p.parse_generic_types()
 	no_body := p.tok.kind != .lcbr
 	if language == .v && no_body {
 		p.error('`$p.tok.lit` lacks body')
 		return ast.StructDecl{}
 	}
-	if language == .v && !p.builtin_mod && name.len > 0 && !name[0].is_capital()
-		&& !p.pref.translated {
+	if language == .v && !p.builtin_mod && !p.is_translated && name.len > 0 && !name[0].is_capital()
+		&& !p.pref.translated && !p.is_translated {
 		p.error_with_pos('struct name `$name` must begin with capital letter', name_pos)
 		return ast.StructDecl{}
 	}
@@ -337,10 +341,9 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 
 fn (mut p Parser) struct_init(typ_str string, short_syntax bool) ast.StructInit {
 	first_pos := (if short_syntax && p.prev_tok.kind == .lcbr { p.prev_tok } else { p.tok }).pos()
+	p.struct_init_generic_types = []ast.Type{}
 	typ := if short_syntax { ast.void_type } else { p.parse_type() }
 	p.expr_mod = ''
-	// sym := p.table.sym(typ)
-	// p.warn('struct init typ=$sym.name')
 	if !short_syntax {
 		p.check(.lcbr)
 	}
@@ -425,7 +428,9 @@ fn (mut p Parser) struct_init(typ_str string, short_syntax bool) ast.StructInit 
 		name_pos: first_pos
 		pos: first_pos.extend(if short_syntax { p.tok.pos() } else { p.prev_tok.pos() })
 		is_short: no_keys
+		is_short_syntax: short_syntax
 		pre_comments: pre_comments
+		generic_types: p.struct_init_generic_types
 	}
 }
 
@@ -452,6 +457,10 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 	name_pos := p.tok.pos()
 	p.check_for_impure_v(language, name_pos)
 	modless_name := p.check_name()
+	if modless_name == 'IError' && p.mod != 'builtin' {
+		p.error_with_pos('cannot register interface `IError`, it is builtin interface type',
+			name_pos)
+	}
 	mut interface_name := ''
 	if language == .js {
 		interface_name = 'JS.' + modless_name
@@ -517,6 +526,32 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 			}
 			continue
 		}
+
+		// Check embedded interface from external module
+		if p.tok.kind == .name && p.peek_tok.kind == .dot {
+			if p.tok.lit !in p.imports {
+				p.error_with_pos('mod `$p.tok.lit` not imported', p.tok.pos())
+				break
+			}
+			mod_name := p.tok.lit
+			from_mod_typ := p.parse_type()
+			from_mod_name := '${mod_name}.$p.prev_tok.lit'
+			if from_mod_name.is_lower() {
+				p.error_with_pos('The interface name need to have the pascal case', p.prev_tok.pos())
+				break
+			}
+			comments := p.eat_comments()
+			ifaces << ast.InterfaceEmbedding{
+				name: from_mod_name
+				typ: from_mod_typ
+				pos: p.prev_tok.pos()
+				comments: comments
+			}
+			if p.tok.kind == .rcbr {
+				break
+			}
+		}
+
 		if p.tok.kind == .key_mut {
 			if is_mut {
 				p.error_with_pos('redefinition of `mut` section', p.tok.pos())
@@ -557,6 +592,7 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 			args << args2
 			mut method := ast.FnDecl{
 				name: name
+				short_name: name
 				mod: p.mod
 				params: args
 				file: p.file_name
@@ -620,7 +656,7 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 			}
 		}
 	}
-	info.ifaces = ifaces.map(it.typ)
+	info.embeds = ifaces.map(it.typ)
 	ts.info = info
 	p.top_level_statement_end()
 	p.check(.rcbr)
@@ -631,7 +667,7 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 		typ: typ
 		fields: fields
 		methods: methods
-		ifaces: ifaces
+		embeds: ifaces
 		is_pub: is_pub
 		attrs: attrs
 		pos: pos

@@ -117,9 +117,8 @@ fn (mut g Gen) comptime_call(mut node ast.ComptimeCall) {
 
 		// try to see if we need to pass a pointer
 		if node.left is ast.Ident {
-			scope := g.file.scope.innermost(node.pos.pos)
-			if v := scope.find_var(node.left.name) {
-				if m.params[0].typ.is_ptr() && !v.typ.is_ptr() {
+			if node.left.obj is ast.Var {
+				if m.params[0].typ.is_ptr() && !node.left.obj.typ.is_ptr() {
 					g.write('&')
 				}
 			}
@@ -320,7 +319,7 @@ fn (mut g Gen) comptime_if_cond(cond ast.Expr, pkg_exist bool) bool {
 		}
 		ast.PostfixExpr {
 			ifdef := g.comptime_if_to_ifdef((cond.expr as ast.Ident).name, true) or {
-				verror(err.msg)
+				verror(err.msg())
 				return false
 			}
 			g.write('defined($ifdef)')
@@ -337,6 +336,25 @@ fn (mut g Gen) comptime_if_cond(cond ast.Expr, pkg_exist bool) bool {
 				.key_is, .not_is {
 					left := cond.left
 					mut name := ''
+					if left is ast.TypeNode && cond.right is ast.ComptimeType {
+						checked_type := g.unwrap_generic(left.typ)
+						is_true := g.table.is_comptime_type(checked_type, cond.right)
+						if cond.op == .key_is {
+							if is_true {
+								g.write('1')
+							} else {
+								g.write('0')
+							}
+							return is_true
+						} else {
+							if is_true {
+								g.write('0')
+							} else {
+								g.write('1')
+							}
+							return !is_true
+						}
+					}
 					mut exp_type := ast.Type(0)
 					got_type := (cond.right as ast.TypeNode).typ
 					// Handle `$if x is Interface {`
@@ -503,13 +521,16 @@ fn (mut g Gen) comptime_for(node ast.ComptimeFor) {
 		}
 	} else if node.kind == .fields {
 		// TODO add fields
-		if sym.info is ast.Struct {
-			if sym.info.fields.len > 0 {
+		if sym.kind == .struct_ {
+			sym_info := sym.info as ast.Struct
+			if sym_info.fields.len > 0 {
 				g.writeln('\tFieldData $node.val_var = {0};')
 			}
-			for field in sym.info.fields {
+			g.inside_comptime_for_field = true
+			for field in sym_info.fields {
 				g.comptime_for_field_var = node.val_var
 				g.comptime_for_field_value = field
+				g.comptime_for_field_type = field.typ
 				g.writeln('/* field $i */ {')
 				g.writeln('\t${node.val_var}.name = _SLIT("$field.name");')
 				if field.attrs.len == 0 {
@@ -531,7 +552,9 @@ fn (mut g Gen) comptime_for(node ast.ComptimeFor) {
 				g.stmts(node.stmts)
 				i++
 				g.writeln('}')
+				g.comptime_for_field_type = 0
 			}
+			g.inside_comptime_for_field = false
 			g.comptime_var_type_map.delete(node.val_var)
 		}
 	} else if node.kind == .attributes {

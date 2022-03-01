@@ -12,7 +12,7 @@ fn (mut c Checker) comptime_call(mut node ast.ComptimeCall) ast.Type {
 	node.left_type = c.expr(node.left)
 	if node.is_env {
 		env_value := util.resolve_env_value("\$env('$node.args_var')", false) or {
-			c.error(err.msg, node.env_pos)
+			c.error(err.msg(), node.env_pos)
 			return ast.string_type
 		}
 		node.env_value = env_value
@@ -37,6 +37,7 @@ fn (mut c Checker) comptime_call(mut node ast.ComptimeCall) ast.Type {
 		}
 		mut c2 := new_checker(c.table, pref2)
 		c2.check(node.vweb_tmpl)
+		mut caller_scope := c.fn_scope.innermost(node.pos.pos)
 		mut i := 0 // tmp counter var for skipping first three tmpl vars
 		for k, _ in c2.file.scope.children[0].objects {
 			if i < 2 {
@@ -44,10 +45,17 @@ fn (mut c Checker) comptime_call(mut node ast.ComptimeCall) ast.Type {
 				i++
 				continue
 			}
-			if k in c.fn_scope.objects && unsafe { c.fn_scope.objects[k] } is ast.Var {
-				mut vsc := unsafe { c.fn_scope.objects[k] } as ast.Var
-				vsc.is_used = true
-				c.fn_scope.objects[k] = vsc
+			tmpl_obj := unsafe { c2.file.scope.children[0].objects[k] }
+			if tmpl_obj is ast.Var {
+				if mut caller_var := caller_scope.find_var(tmpl_obj.name) {
+					// var is used in the tmpl so mark it as used in the caller
+					caller_var.is_used = true
+					// update props from the caller scope var to the tmpl scope var
+					c2.file.scope.children[0].objects[k] = ast.Var{
+						...(*caller_var)
+						pos: tmpl_obj.pos
+					}
+				}
 			}
 		}
 		c.warnings << c2.warnings
@@ -109,10 +117,19 @@ fn (mut c Checker) comptime_for(node ast.ComptimeFor) {
 		c.error('unknown type `$sym.name`', node.typ_pos)
 	}
 	if node.kind == .fields {
-		c.comptime_fields_type[node.val_var] = node.typ
-		c.comptime_fields_default_type = node.typ
+		if sym.kind == .struct_ {
+			sym_info := sym.info as ast.Struct
+			c.inside_comptime_for_field = true
+			for field in sym_info.fields {
+				c.comptime_fields_type[node.val_var] = node.typ
+				c.comptime_fields_default_type = field.typ
+				c.stmts(node.stmts)
+			}
+			c.inside_comptime_for_field = false
+		}
+	} else {
+		c.stmts(node.stmts)
 	}
-	c.stmts(node.stmts)
 }
 
 // comptime const eval
@@ -459,6 +476,10 @@ fn (mut c Checker) comptime_if_branch(cond ast.Expr, pos token.Pos) bool {
 							// c.error('`$sym.name` is not an interface', cond.right.pos())
 						}
 						return false
+					} else if cond.left is ast.TypeNode && cond.right is ast.ComptimeType {
+						left := cond.left as ast.TypeNode
+						checked_type := c.unwrap_generic(left.typ)
+						return c.table.is_comptime_type(checked_type, cond.right)
 					} else if cond.left in [ast.SelectorExpr, ast.TypeNode] {
 						// `$if method.@type is string`
 						c.expr(cond.left)
@@ -476,7 +497,7 @@ fn (mut c Checker) comptime_if_branch(cond ast.Expr, pos token.Pos) bool {
 						left_type := c.expr(cond.left)
 						right_type := c.expr(cond.right)
 						expr := c.find_definition(cond.left) or {
-							c.error(err.msg, cond.left.pos)
+							c.error(err.msg(), cond.left.pos)
 							return false
 						}
 						if !c.check_types(right_type, left_type) {
@@ -558,7 +579,7 @@ fn (mut c Checker) comptime_if_branch(cond ast.Expr, pos token.Pos) bool {
 					return false
 				}
 				expr := c.find_obj_definition(cond.obj) or {
-					c.error(err.msg, cond.pos)
+					c.error(err.msg(), cond.pos)
 					return false
 				}
 				if !c.check_types(typ, ast.bool_type) {
@@ -573,7 +594,7 @@ fn (mut c Checker) comptime_if_branch(cond ast.Expr, pos token.Pos) bool {
 		ast.ComptimeCall {
 			if cond.is_pkgconfig {
 				mut m := pkgconfig.main([cond.args_var]) or {
-					c.error(err.msg, cond.pos)
+					c.error(err.msg(), cond.pos)
 					return true
 				}
 				m.run() or { return true }

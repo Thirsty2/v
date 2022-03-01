@@ -383,6 +383,9 @@ fn (g &JsGen) get_all_test_function_names() []string {
 	mut tsuite_begin := ''
 	mut tsuite_end := ''
 	for _, f in g.table.fns {
+		if !f.is_test {
+			continue
+		}
 		if f.name.ends_with('.testsuite_begin') {
 			tsuite_begin = f.name
 			continue
@@ -853,6 +856,9 @@ fn (mut g JsGen) stmt(node ast.Stmt) {
 fn (mut g JsGen) expr(node ast.Expr) {
 	// NB: please keep the type names in the match here in alphabetical order:
 	match mut node {
+		ast.ComptimeType {
+			verror('not yet implemented')
+		}
 		ast.EmptyExpr {}
 		ast.AnonFn {
 			g.gen_anon_fn(mut node)
@@ -1057,8 +1063,7 @@ fn (mut g JsGen) expr(node ast.Expr) {
 }
 
 struct UnsupportedAssertCtempTransform {
-	msg  string
-	code int
+	Error
 }
 
 const unsupported_ctemp_assert_transform = IError(UnsupportedAssertCtempTransform{})

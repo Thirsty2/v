@@ -119,9 +119,11 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 					}
 					ast.SelectorExpr {
 						root_ident := node.cond.root_ident() or { node.cond.expr as ast.Ident }
-						if !(root_ident.obj as ast.Var).is_mut {
-							c.error('field `$node.cond.field_name` is immutable, it cannot be changed',
-								node.cond.pos)
+						if root_ident.kind != .unresolved {
+							if !(root_ident.obj as ast.Var).is_mut {
+								c.error('field `$node.cond.field_name` is immutable, it cannot be changed',
+									node.cond.pos)
+							}
 						}
 					}
 					else {}
@@ -144,7 +146,7 @@ fn (mut c Checker) for_stmt(mut node ast.ForStmt) {
 	prev_loop_label := c.loop_label
 	c.expected_type = ast.bool_type
 	typ := c.expr(node.cond)
-	if !node.is_inf && typ.idx() != ast.bool_type_idx && !c.pref.translated {
+	if !node.is_inf && typ.idx() != ast.bool_type_idx && !c.pref.translated && !c.file.is_translated {
 		c.error('non-bool used as for condition', node.pos)
 	}
 	if mut node.cond is ast.InfixExpr {

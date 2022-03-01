@@ -21,13 +21,13 @@ mut:
 
 pub fn dial_tcp(address string) ?&TcpConn {
 	addrs := resolve_addrs_fuzzy(address, .tcp) or {
-		return error('$err.msg; could not resolve address $address in dial_tcp')
+		return error('$err.msg(); could not resolve address $address in dial_tcp')
 	}
 
 	// Very simple dialer
 	for addr in addrs {
 		mut s := new_tcp_socket(addr.family()) or {
-			return error('$err.msg; could not create new tcp socket in dial_tcp')
+			return error('$err.msg(); could not create new tcp socket in dial_tcp')
 		}
 		s.connect(addr) or {
 			// Connection failed
@@ -215,10 +215,10 @@ mut:
 }
 
 pub fn listen_tcp(family AddrFamily, saddr string) ?&TcpListener {
-	s := new_tcp_socket(family) or { return error('$err.msg; could not create new socket') }
+	s := new_tcp_socket(family) or { return error('$err.msg(); could not create new socket') }
 
 	addrs := resolve_addrs(saddr, family, .tcp) or {
-		return error('$err.msg; could not resolve address $saddr')
+		return error('$err.msg(); could not resolve address $saddr')
 	}
 
 	// TODO(logic to pick here)
@@ -296,8 +296,7 @@ pub fn (c &TcpListener) addr() ?Addr {
 }
 
 struct TcpSocket {
-pub:
-	handle int
+	Socket
 }
 
 fn new_tcp_socket(family AddrFamily) ?TcpSocket {
@@ -417,9 +416,4 @@ fn (mut s TcpSocket) connect(a Addr) ? {
 
 	// otherwise we timed out
 	return err_connect_timed_out
-}
-
-// address gets the address of a socket
-pub fn (s &TcpSocket) address() ?Addr {
-	return addr_from_socket_handle(s.handle)
 }
