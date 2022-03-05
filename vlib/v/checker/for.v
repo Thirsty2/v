@@ -3,6 +3,7 @@
 module checker
 
 import v.ast
+import v.token
 
 fn (mut c Checker) for_c_stmt(node ast.ForCStmt) {
 	c.in_for_count++
@@ -103,10 +104,9 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 				value_type = value_type.ref()
 				match node.cond {
 					ast.Ident {
-						if node.cond.obj is ast.Var {
-							obj := node.cond.obj as ast.Var
-							if !obj.is_mut {
-								c.error('`$obj.name` is immutable, it cannot be changed',
+						if mut node.cond.obj is ast.Var {
+							if !node.cond.obj.is_mut {
+								c.error('`$node.cond.obj.name` is immutable, it cannot be changed',
 									node.cond.pos)
 							}
 						}
@@ -150,21 +150,11 @@ fn (mut c Checker) for_stmt(mut node ast.ForStmt) {
 		c.error('non-bool used as for condition', node.pos)
 	}
 	if mut node.cond is ast.InfixExpr {
-		infix := node.cond
-		if infix.op == .key_is {
-			if infix.right is ast.TypeNode && infix.left in [ast.Ident, ast.SelectorExpr] {
-				is_variable := if mut infix.left is ast.Ident {
-					infix.left.kind == .variable
-				} else {
-					true
-				}
-				left_type := c.expr(infix.left)
-				left_sym := c.table.sym(left_type)
-				if is_variable {
-					if left_sym.kind in [.sum_type, .interface_] {
-						c.smartcast(infix.left, infix.left_type, infix.right.typ, mut
-							node.scope)
-					}
+		if node.cond.op == .key_is {
+			if node.cond.right is ast.TypeNode && node.cond.left in [ast.Ident, ast.SelectorExpr] {
+				if c.table.type_kind(node.cond.left_type) in [.sum_type, .interface_] {
+					c.smartcast(node.cond.left, node.cond.left_type, node.cond.right_type, mut
+						node.scope)
 				}
 			}
 		}
@@ -175,4 +165,7 @@ fn (mut c Checker) for_stmt(mut node ast.ForStmt) {
 	c.stmts(node.stmts)
 	c.loop_label = prev_loop_label
 	c.in_for_count--
+	if c.smartcast_mut_pos != token.Pos{} {
+		c.smartcast_mut_pos = token.Pos{}
+	}
 }
