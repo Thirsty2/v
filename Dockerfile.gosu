@@ -1,7 +1,9 @@
 FROM vlang-base:latest
 
 RUN apt-get update && apt-get install -y \
+    cmake \
     gosu \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # At this point, this container still runs as root, and any files it creates in bind-mounted
