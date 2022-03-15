@@ -534,7 +534,7 @@ pub fn (mut v Builder) cc() {
 			}
 			ccompiler = 'xcrun --sdk iphoneos clang -isysroot $isysroot $arch'
 		} else if v.pref.os == .wasm32 {
-			ccompiler = 'clang-12'
+			ccompiler = 'clang'
 		}
 		v.setup_ccompiler_options(ccompiler)
 		v.build_thirdparty_obj_files()
@@ -662,7 +662,7 @@ pub fn (mut v Builder) cc() {
 			println('strip failed')
 			return
 		}
-		// NB: upx --lzma can sometimes fail with NotCompressibleException
+		// Note: upx --lzma can sometimes fail with NotCompressibleException
 		// See https://github.com/vlang/v/pull/3528
 		mut ret2 := os.system('upx --lzma -qqq $v.pref.out_name')
 		if ret2 != 0 {

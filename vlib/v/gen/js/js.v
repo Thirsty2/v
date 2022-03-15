@@ -641,8 +641,9 @@ fn (mut g JsGen) gen_alias_type_decl(node ast.AliasTypeDecl) {
 	g.writeln('function ${name}(val) { return val;  }')
 }
 
-fn (mut g JsGen) stmt_no_semi(node ast.Stmt) {
+fn (mut g JsGen) stmt_no_semi(node_ ast.Stmt) {
 	g.stmt_start_pos = g.out.len
+	mut node := unsafe { node_ }
 	match mut node {
 		ast.EmptyStmt {}
 		ast.AsmStmt {
@@ -744,8 +745,9 @@ fn (mut g JsGen) stmt_no_semi(node ast.Stmt) {
 	}
 }
 
-fn (mut g JsGen) stmt(node ast.Stmt) {
+fn (mut g JsGen) stmt(node_ ast.Stmt) {
 	g.stmt_start_pos = g.out.len
+	mut node := unsafe { node_ }
 	match mut node {
 		ast.EmptyStmt {}
 		ast.AsmStmt {
@@ -853,8 +855,9 @@ fn (mut g JsGen) stmt(node ast.Stmt) {
 	}
 }
 
-fn (mut g JsGen) expr(node ast.Expr) {
-	// NB: please keep the type names in the match here in alphabetical order:
+fn (mut g JsGen) expr(node_ ast.Expr) {
+	// Note: please keep the type names in the match here in alphabetical order:
+	mut node := unsafe { node_ }
 	match mut node {
 		ast.ComptimeType {
 			verror('not yet implemented')
@@ -1128,7 +1131,7 @@ fn (mut g JsGen) gen_assert_metainfo(node ast.AssertStmt) string {
 	metasrc := src
 	g.writeln('${metaname}.src = "$metasrc"')
 
-	match mut node.expr {
+	match node.expr {
 		ast.InfixExpr {
 			expr_op_str := node.expr.op.str()
 			expr_left_str := node.expr.left.str()
@@ -1594,7 +1597,7 @@ fn (mut g JsGen) gen_expr_stmt_no_semi(it ast.ExprStmt) {
 fn (mut g JsGen) cc_type(typ ast.Type, is_prefix_struct bool) string {
 	sym := g.table.sym(g.unwrap_generic(typ))
 	mut styp := sym.cname.replace('>', '').replace('<', '')
-	match mut sym.info {
+	match sym.info {
 		ast.Struct, ast.Interface, ast.SumType {
 			if sym.info.is_generic {
 				mut sgtyps := '_T'
@@ -2077,7 +2080,7 @@ fn (mut g JsGen) gen_struct_decl(node ast.StructDecl) {
 }
 
 fn (mut g JsGen) gen_array_init_expr(it ast.ArrayInit) {
-	// NB: Fixed arrays and regular arrays are handled the same, since fixed arrays:
+	// Note: Fixed arrays and regular arrays are handled the same, since fixed arrays:
 	// 1)  Are only available for number types
 	// 2)  Give the code unnecessary complexity
 	// 3)  Have several limitations like missing most `Array.prototype` methods

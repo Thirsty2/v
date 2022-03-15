@@ -1,6 +1,6 @@
 module main
 
-// NB: this should be in vlib/crypto/ed25519/ed25519_test.v
+// Note: this should be in vlib/crypto/ed25519/ed25519_test.v
 // but is currently one folder below, because of a V parser/symbol registration bug.
 // TODO: move this test back to vlib/crypto/ed25519/ed25519_test.v
 import os
@@ -97,8 +97,8 @@ fn works_check_on_sign_input_string(item string) bool {
 
 	sig = sig[..ed25519.signature_size]
 	mut priv := []byte{len: ed25519.private_key_size}
-	copy(priv[..], privbytes)
-	copy(priv[32..], pubkey)
+	copy(mut priv[..], privbytes)
+	copy(mut priv[32..], pubkey)
 
 	sig2 := ed25519.sign(priv[..], msg) or { panic(err.msg) }
 	if sig != sig2[..] {
@@ -182,8 +182,8 @@ fn test_input_from_djb_ed25519_crypto_sign_input_without_syncpool() ? {
 
 		sig = sig[..signature_size]
 		mut priv := []byte{len: ed25519.private_key_size}
-		copy(priv[..], privbytes)
-		copy(priv[32..], pubkey)
+		copy(mut priv[..], privbytes)
+		copy(mut priv[32..], pubkey)
 
 		sig2 := ed25519.sign(priv[..], msg) ?
 		assert sig == sig2[..]

@@ -283,7 +283,7 @@ pub fn (mut a array) delete_many(i int, size int) {
 			panic('array.delete: index out of range (i == $i$endidx, a.len == $a.len)')
 		}
 	}
-	// NB: if a is [12,34], a.len = 2, a.delete(0)
+	// Note: if a is [12,34], a.len = 2, a.delete(0)
 	// should move (2-0-1) elements = 1 element (the 34) forward
 	old_data := a.data
 	new_size := a.len - size
@@ -400,7 +400,7 @@ pub fn (mut a array) pop() voidptr {
 	new_len := a.len - 1
 	last_elem := unsafe { &byte(a.data) + new_len * a.element_size }
 	a.len = new_len
-	// NB: a.cap is not changed here *on purpose*, so that
+	// Note: a.cap is not changed here *on purpose*, so that
 	// further << ops on that array will be more efficient.
 	return unsafe { memdup(last_elem, a.element_size) }
 }
@@ -791,7 +791,7 @@ pub fn (a []string) str() string {
 // hex returns a string with the hexadecimal representation
 // of the byte elements of the array.
 pub fn (b []byte) hex() string {
-	mut hex := unsafe { malloc(b.len * 2 + 1) }
+	mut hex := unsafe { malloc_noscan(b.len * 2 + 1) }
 	mut dst_i := 0
 	for i in b {
 		n0 := i >> 4
@@ -815,18 +815,19 @@ pub fn (b []byte) hex() string {
 // The number of the elements copied is the minimum of the length of both arrays.
 // Returns the number of elements copied.
 // NOTE: This is not an `array` method. It is a function that takes two arrays of bytes.
-// TODO: implement for all types
-pub fn copy(dst []byte, src []byte) int {
+// See also: `arrays.copy`.
+pub fn copy(mut dst []byte, src []byte) int {
 	min := if dst.len < src.len { dst.len } else { src.len }
 	if min > 0 {
-		unsafe { vmemcpy(&byte(dst.data), src.data, min) }
+		unsafe { vmemmove(&byte(dst.data), src.data, min) }
 	}
 	return min
 }
 
 // reduce executes a given reducer function on each element of the array,
 // resulting in a single output value.
-// NOTE: It exists as a method on `[]int` types only
+// NOTE: It exists as a method on `[]int` types only.
+// See also `arrays.fold`.
 pub fn (a []int) reduce(iter fn (int, int) int, accum_start int) int {
 	mut accum_ := accum_start
 	for i in a {

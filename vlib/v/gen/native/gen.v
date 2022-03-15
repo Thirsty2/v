@@ -7,6 +7,7 @@ import os
 import strings
 import v.ast
 import v.util
+import v.mathutil as mu
 import v.token
 import v.errors
 import v.pref
@@ -31,9 +32,7 @@ mut:
 	buf                  []byte
 	sect_header_name_pos int
 	offset               i64
-	str_pos              []i64
 	stackframe_size      int
-	strings              []string // TODO use a map and don't duplicate strings
 	file_size_pos        i64
 	main_fn_addr         i64
 	code_start_pos       i64 // location of the start of the assembly instructions
@@ -50,9 +49,18 @@ mut:
 	strs                 []String
 }
 
+enum RelocType {
+	rel8
+	rel16
+	rel32
+	rel64
+	abs64
+}
+
 struct String {
 	str string
 	pos int
+	typ RelocType
 }
 
 struct CallPatch {
@@ -149,7 +157,7 @@ pub fn (mut g Gen) create_executable() {
 	os.write_file_array(g.out_name, g.buf) or { panic(err) }
 	os.chmod(g.out_name, 0o775) or { panic(err) } // make it executable
 	if g.pref.is_verbose {
-		println('\n$g.out_name: native binary has been successfully generated')
+		eprintln('\n$g.out_name: native binary has been successfully generated')
 	}
 }
 
@@ -168,7 +176,10 @@ pub fn (mut g Gen) generate_footer() {
 		.raw {
 			g.create_executable()
 		}
-		else {}
+		else {
+			eprintln('Unsupported target file format')
+			exit(1)
+		}
 	}
 }
 
@@ -224,7 +235,7 @@ fn (mut g Gen) write64(n i64) {
 	g.buf << byte(n >> 56)
 }
 
-fn (mut g Gen) write64_at(n i64, at i64) {
+fn (mut g Gen) write64_at(at i64, n i64) {
 	// write 8 bytes
 	g.buf[at] = byte(n)
 	g.buf[at + 1] = byte(n >> 8)
@@ -244,11 +255,17 @@ fn (mut g Gen) write32_at(at i64, n int) {
 	g.buf[at + 3] = byte(n >> 24)
 }
 
+fn (mut g Gen) write16_at(at i64, n int) {
+	// write 2 bytes
+	g.buf[at] = byte(n)
+	g.buf[at + 1] = byte(n >> 8)
+}
+
 fn (mut g Gen) write_string(s string) {
 	for c in s {
 		g.write8(int(c))
 	}
-	// g.write8(0) // null terminated strings
+	g.zeroes(1)
 }
 
 fn (mut g Gen) write_string_with_padding(s string, max int) {
@@ -260,12 +277,26 @@ fn (mut g Gen) write_string_with_padding(s string, max int) {
 	}
 }
 
-fn (mut g Gen) get_var_offset(var_name string) int {
-	offset := g.var_offset[var_name]
+fn (mut g Gen) try_var_offset(var_name string) int {
+	offset := g.var_offset[var_name] or { return -1 }
 	if offset == 0 {
-		g.n_error('unknown variable `$var_name`')
+		return -1
 	}
 	return offset
+}
+
+fn (mut g Gen) get_var_offset(var_name string) int {
+	r := g.try_var_offset(var_name)
+	if r == -1 {
+		g.n_error('unknown variable `$var_name`')
+	}
+	return r
+}
+
+fn (mut g Gen) gen_typeof_expr(it ast.TypeOf, newline bool) {
+	nl := if newline { '\n' } else { '' }
+	r := g.typ(it.expr_type).name
+	g.learel(.rax, g.allocate_string('$r$nl', 3, .rel32))
 }
 
 pub fn (mut g Gen) gen_print_from_expr(expr ast.Expr, name string) {
@@ -284,19 +315,29 @@ pub fn (mut g Gen) gen_print_from_expr(expr ast.Expr, name string) {
 			g.gen_print_reg(.rax, 3, fd)
 		}
 		ast.Ident {
-			g.expr(expr)
+			vo := g.try_var_offset(expr.name)
+			if vo != -1 {
+				g.n_error('Printing idents is not yet supported in the native backend')
+				// g.mov_var_to_reg(.rsi, vo)
+				// g.mov_reg(.rax, .rsi)
+				// g.learel(.rax, vo * 8)
+				// g.relpc(.rax, .rsi)
+				// g.learel(.rax, g.allocate_string('$vo\n', 3, .rel32))
+				// g.expr(expr)
+			}
 			g.gen_print_reg(.rax, 3, fd)
 		}
 		ast.IntegerLiteral {
-			g.mov64(.rax, g.allocate_string('$expr.val\n', 2))
+			g.learel(.rax, g.allocate_string('$expr.val\n', 3, .rel32))
 			g.gen_print_reg(.rax, 3, fd)
 		}
 		ast.BoolLiteral {
 			// register 'true' and 'false' strings // g.expr(expr)
+			// XXX mov64 shuoldnt be used for addressing
 			if expr.val {
-				g.mov64(.rax, g.allocate_string('true', 2))
+				g.learel(.rax, g.allocate_string('true', 3, .rel32))
 			} else {
-				g.mov64(.rax, g.allocate_string('false', 2))
+				g.learel(.rax, g.allocate_string('false', 3, .rel32))
 			}
 			g.gen_print_reg(.rax, 3, fd)
 		}
@@ -310,7 +351,7 @@ pub fn (mut g Gen) gen_print_from_expr(expr ast.Expr, name string) {
 				mut off := 0
 				for f in s.fields {
 					if f.name == field_name {
-						g.mov64(.rax, g.allocate_string('$off\n', 2))
+						g.learel(.rax, g.allocate_string('$off\n', 3, .rel32))
 						g.gen_print_reg(.rax, 3, fd)
 						break
 					}
@@ -371,8 +412,10 @@ g.expr
 		ast.SelectExpr {}
 		ast.SqlExpr {}
 		ast.TypeNode {}
-		ast.TypeOf {}
 		*/
+		ast.TypeOf {
+			g.gen_typeof_expr(expr, newline)
+		}
 		ast.LockExpr {
 			// passthru
 			eprintln('Warning: locks not implemented yet in the native backend')
@@ -431,19 +474,25 @@ fn (mut g Gen) println(comment string) {
 		return
 	}
 	addr := g.debug_pos.hex()
+	mut sb := strings.new_builder(80)
 	// println('$g.debug_pos "$addr"')
-	print(term.red(strings.repeat(`0`, 6 - addr.len) + addr + '  '))
+	sb.write_string(term.red(strings.repeat(`0`, 6 - addr.len) + addr + '  '))
 	for i := g.debug_pos; i < g.pos(); i++ {
 		s := g.buf[i].hex()
 		if s.len == 1 {
-			print(term.blue('0'))
+			sb.write_string(term.blue('0'))
 		}
 		gbihex := g.buf[i].hex()
 		hexstr := term.blue(gbihex) + ' '
-		print(hexstr)
+		sb.write_string(hexstr)
 	}
 	g.debug_pos = g.buf.len
-	println(' ' + comment)
+	//
+	colored := sb.str()
+	plain := term.strip_ansi(colored)
+	padding := ' '.repeat(mu.max(1, 40 - plain.len))
+	final := '$colored$padding$comment'
+	println(final)
 }
 
 fn (mut g Gen) gen_forc_stmt(node ast.ForCStmt) {
@@ -457,7 +506,7 @@ fn (mut g Gen) gen_forc_stmt(node ast.ForCStmt) {
 		match cond {
 			ast.InfixExpr {
 				// g.infix_expr(node.cond)
-				match mut cond.left {
+				match cond.left {
 					ast.Ident {
 						lit := cond.right as ast.IntegerLiteral
 						g.cmp_var(cond.left.name, lit.val.int())
@@ -591,7 +640,7 @@ fn (mut g Gen) stmt(node ast.Stmt) {
 				ast.StringLiteral {
 					s = e0.val.str()
 					g.expr(node.exprs[0])
-					g.mov64(.rax, g.allocate_string(s, 2))
+					g.mov64(.rax, g.allocate_string(s, 2, .abs64))
 				}
 				ast.Ident {
 					g.expr(e0)
@@ -643,7 +692,7 @@ fn (mut g Gen) gen_syscall(node ast.CallExpr) {
 					match expr.expr {
 						ast.StringLiteral {
 							s := expr.expr.val.replace('\\n', '\n')
-							g.allocate_string(s, 2)
+							g.allocate_string(s, 2, .abs64)
 							g.mov64(ra[i], 1)
 							done = true
 						}
@@ -660,7 +709,7 @@ fn (mut g Gen) gen_syscall(node ast.CallExpr) {
 						node.pos)
 				}
 				s := expr.val.replace('\\n', '\n')
-				g.allocate_string(s, 2)
+				g.allocate_string(s, 2, .abs64)
 				g.mov64(ra[i], 1)
 			}
 			else {
@@ -699,7 +748,10 @@ fn (mut g Gen) expr(node ast.Expr) {
 		}
 		ast.FloatLiteral {}
 		ast.Ident {
-			offset := g.get_var_offset(node.obj.name) // i := 0
+			offset := g.try_var_offset(node.obj.name) // i := 0
+			if offset == -1 {
+				g.n_error('invalid ident $node.obj.name')
+			}
 			// offset := g.get_var_offset(node.name)
 			// XXX this is intel specific
 			g.mov_var_to_reg(.rax, offset)

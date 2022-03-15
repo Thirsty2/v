@@ -57,25 +57,26 @@ fn all_valid_comptime_idents() []string {
 pub struct Checker {
 	pref &pref.Preferences // Preferences shared from V struct
 pub mut:
-	table            &ast.Table
-	file             &ast.File = 0
-	nr_errors        int
-	nr_warnings      int
-	nr_notices       int
-	errors           []errors.Error
-	warnings         []errors.Warning
-	notices          []errors.Notice
-	error_lines      []int // to avoid printing multiple errors for the same line
-	expected_type    ast.Type
-	expected_or_type ast.Type // fn() or { 'this type' } eg. string. expected or block type
-	mod              string   // current module name
-	const_decl       string
-	const_deps       []string
-	const_names      []string
-	global_names     []string
-	locked_names     []string // vars that are currently locked
-	rlocked_names    []string // vars that are currently read-locked
-	in_for_count     int      // if checker is currently in a for loop
+	table              &ast.Table
+	file               &ast.File = 0
+	nr_errors          int
+	nr_warnings        int
+	nr_notices         int
+	errors             []errors.Error
+	warnings           []errors.Warning
+	notices            []errors.Notice
+	error_lines        []int // to avoid printing multiple errors for the same line
+	expected_type      ast.Type
+	expected_or_type   ast.Type // fn() or { 'this type' } eg. string. expected or block type
+	expected_expr_type ast.Type // if/match is_expr: expected_type
+	mod                string   // current module name
+	const_decl         string
+	const_deps         []string
+	const_names        []string
+	global_names       []string
+	locked_names       []string // vars that are currently locked
+	rlocked_names      []string // vars that are currently read-locked
+	in_for_count       int      // if checker is currently in a for loop
 	// checked_ident  string // to avoid infinite checker loops
 	should_abort              bool // when too many errors/warnings/notices are accumulated, .should_abort becomes true. It is checked in statement/expression loops, so the checker can return early, instead of wasting time.
 	returns                   bool
@@ -527,7 +528,7 @@ pub fn (mut c Checker) expand_iface_embeds(idecl &ast.InterfaceDecl, level int, 
 }
 
 fn (mut c Checker) check_div_mod_by_zero(expr ast.Expr, op_kind token.Kind) {
-	match mut expr {
+	match expr {
 		ast.FloatLiteral {
 			if expr.val.f64() == 0.0 {
 				oper := if op_kind == .div { 'division' } else { 'modulo' }
@@ -819,6 +820,31 @@ pub fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 				} else if need_overload && !gen_sym.has_method('<') && node.op == .gt {
 					c.error('cannot use `>` as `<=` operator method is not defined', left_right_pos)
 				}
+			} else if left_type in ast.integer_type_idxs && right_type in ast.integer_type_idxs {
+				is_left_type_signed := left_type in ast.signed_integer_type_idxs
+					|| left_type == ast.int_literal_type_idx
+				is_right_type_signed := right_type in ast.signed_integer_type_idxs
+					|| right_type == ast.int_literal_type_idx
+				if is_left_type_signed != is_right_type_signed {
+					if is_right_type_signed {
+						if mut node.right is ast.IntegerLiteral {
+							if node.right.val.int() < 0 {
+								c.error('unsigned integer cannot be compared with negative value',
+									node.right.pos)
+							}
+						}
+					} else if is_left_type_signed {
+						if mut node.left is ast.IntegerLiteral {
+							if node.left.val.int() < 0 {
+								c.error('unsigned integer cannot be compared with negative value',
+									node.left.pos)
+							}
+						}
+					}
+				}
+			} else if left_type.has_flag(.optional) && right_type.has_flag(.optional) {
+				c.error('unwrapped optional cannot be compared in an infix expression',
+					left_right_pos)
 			}
 		}
 		.left_shift {
@@ -1058,10 +1084,11 @@ pub fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 
 // returns name and position of variable that needs write lock
 // also sets `is_changed` to true (TODO update the name to reflect this?)
-fn (mut c Checker) fail_if_immutable(expr ast.Expr) (string, token.Pos) {
+fn (mut c Checker) fail_if_immutable(expr_ ast.Expr) (string, token.Pos) {
 	mut to_lock := '' // name of variable that needs lock
 	mut pos := token.Pos{} // and its position
 	mut explicit_lock_needed := false
+	mut expr := unsafe { expr_ }
 	match mut expr {
 		ast.CastExpr {
 			// TODO
@@ -1441,34 +1468,50 @@ pub fn (mut c Checker) check_or_expr(node ast.OrExpr, ret_type ast.Type, expr_re
 		return
 	}
 	last_stmt := node.stmts[stmts_len - 1]
+	c.check_or_last_stmt(last_stmt, ret_type, expr_return_type)
+}
+
+fn (mut c Checker) check_or_last_stmt(stmt ast.Stmt, ret_type ast.Type, expr_return_type ast.Type) {
 	if ret_type != ast.void_type {
-		match last_stmt {
+		match stmt {
 			ast.ExprStmt {
 				c.expected_type = ret_type
 				c.expected_or_type = ret_type.clear_flag(.optional)
-				last_stmt_typ := c.expr(last_stmt.expr)
+				last_stmt_typ := c.expr(stmt.expr)
 				c.expected_or_type = ast.void_type
 				type_fits := c.check_types(last_stmt_typ, ret_type)
 					&& last_stmt_typ.nr_muls() == ret_type.nr_muls()
-				is_noreturn := is_noreturn_callexpr(last_stmt.expr)
+				is_noreturn := is_noreturn_callexpr(stmt.expr)
 				if type_fits || is_noreturn {
 					return
 				}
 				expected_type_name := c.table.type_to_str(ret_type.clear_flag(.optional))
-				if last_stmt.typ == ast.void_type {
+				if stmt.typ == ast.void_type {
+					if stmt.expr is ast.IfExpr {
+						for branch in stmt.expr.branches {
+							last_stmt := branch.stmts[branch.stmts.len - 1]
+							c.check_or_last_stmt(last_stmt, ret_type, expr_return_type)
+						}
+						return
+					} else if stmt.expr is ast.MatchExpr {
+						for branch in stmt.expr.branches {
+							last_stmt := branch.stmts[branch.stmts.len - 1]
+							c.check_or_last_stmt(last_stmt, ret_type, expr_return_type)
+						}
+						return
+					}
 					c.error('`or` block must provide a default value of type `$expected_type_name`, or return/continue/break or call a [noreturn] function like panic(err) or exit(1)',
-						last_stmt.pos)
+						stmt.expr.pos())
 				} else {
 					type_name := c.table.type_to_str(last_stmt_typ)
 					c.error('wrong return type `$type_name` in the `or {}` block, expected `$expected_type_name`',
-						last_stmt.pos)
+						stmt.expr.pos())
 				}
-				return
 			}
 			ast.BranchStmt {
-				if last_stmt.kind !in [.key_continue, .key_break] {
+				if stmt.kind !in [.key_continue, .key_break] {
 					c.error('only break/continue is allowed as a branch statement in the end of an `or {}` block',
-						last_stmt.pos)
+						stmt.pos)
 					return
 				}
 			}
@@ -1476,27 +1519,42 @@ pub fn (mut c Checker) check_or_expr(node ast.OrExpr, ret_type ast.Type, expr_re
 			else {
 				expected_type_name := c.table.type_to_str(ret_type.clear_flag(.optional))
 				c.error('last statement in the `or {}` block should be an expression of type `$expected_type_name` or exit parent scope',
-					node.pos)
-				return
+					stmt.pos)
 			}
 		}
 	} else {
-		match last_stmt {
+		match stmt {
 			ast.ExprStmt {
-				if last_stmt.typ == ast.void_type {
-					return
+				match stmt.expr {
+					ast.IfExpr {
+						for branch in stmt.expr.branches {
+							last_stmt := branch.stmts[branch.stmts.len - 1]
+							c.check_or_last_stmt(last_stmt, ret_type, expr_return_type)
+						}
+					}
+					ast.MatchExpr {
+						for branch in stmt.expr.branches {
+							last_stmt := branch.stmts[branch.stmts.len - 1]
+							c.check_or_last_stmt(last_stmt, ret_type, expr_return_type)
+						}
+					}
+					else {
+						if stmt.typ == ast.void_type {
+							return
+						}
+						if is_noreturn_callexpr(stmt.expr) {
+							return
+						}
+						if c.check_types(stmt.typ, expr_return_type) {
+							return
+						}
+						// opt_returning_string() or { ... 123 }
+						type_name := c.table.type_to_str(stmt.typ)
+						expr_return_type_name := c.table.type_to_str(expr_return_type)
+						c.error('the default expression type in the `or` block should be `$expr_return_type_name`, instead you gave a value of type `$type_name`',
+							stmt.expr.pos())
+					}
 				}
-				if is_noreturn_callexpr(last_stmt.expr) {
-					return
-				}
-				if c.check_types(last_stmt.typ, expr_return_type) {
-					return
-				}
-				// opt_returning_string() or { ... 123 }
-				type_name := c.table.type_to_str(last_stmt.typ)
-				expr_return_type_name := c.table.type_to_str(expr_return_type)
-				c.error('the default expression type in the `or` block should be `$expr_return_type_name`, instead you gave a value of type `$type_name`',
-					last_stmt.expr.pos())
 			}
 			else {}
 		}
@@ -1821,7 +1879,8 @@ fn (mut c Checker) check_loop_label(label string, pos token.Pos) {
 	c.loop_label = label
 }
 
-fn (mut c Checker) stmt(node ast.Stmt) {
+fn (mut c Checker) stmt(node_ ast.Stmt) {
+	mut node := unsafe { node_ }
 	$if trace_checker ? {
 		ntype := typeof(node).replace('v.ast.', '')
 		eprintln('checking: ${c.file.path:-30} | pos: ${node.pos.line_str():-39} | node: $ntype | $node')
@@ -2121,7 +2180,7 @@ fn (mut c Checker) asm_stmt(mut stmt ast.AsmStmt) {
 }
 
 fn (mut c Checker) asm_arg(arg ast.AsmArg, stmt ast.AsmStmt, aliases []string) {
-	match mut arg {
+	match arg {
 		ast.AsmAlias {}
 		ast.AsmAddressing {
 			if arg.scale !in [-1, 1, 2, 4, 8] {
@@ -2300,7 +2359,7 @@ fn (mut c Checker) import_stmt(node ast.Import) {
 		if sym.name[0].is_capital() {
 			if type_sym := c.table.find_sym(name) {
 				if type_sym.kind != .placeholder {
-					if !type_sym.is_public {
+					if !type_sym.is_pub {
 						c.error('module `$node.mod` type `$sym.name` is private', sym.pos)
 					}
 					continue
@@ -2343,19 +2402,16 @@ fn (mut c Checker) stmts(stmts []ast.Stmt) {
 fn (mut c Checker) stmts_ending_with_expression(stmts []ast.Stmt) {
 	if stmts.len == 0 {
 		c.scope_returns = false
-		c.expected_type = ast.void_type
 		return
 	}
 	if c.stmt_level > checker.stmt_level_cutoff_limit {
 		c.scope_returns = false
-		c.expected_type = ast.void_type
 		c.error('checker: too many stmt levels: $c.stmt_level ', stmts[0].pos)
 		return
 	}
 	mut unreachable := token.Pos{
 		line_nr: -1
 	}
-	c.expected_type = ast.void_type
 	c.stmt_level++
 	for i, stmt in stmts {
 		c.is_last_stmt = i == stmts.len - 1
@@ -2381,7 +2437,6 @@ fn (mut c Checker) stmts_ending_with_expression(stmts []ast.Stmt) {
 	}
 	c.find_unreachable_statements_after_noreturn_calls(stmts)
 	c.scope_returns = false
-	c.expected_type = ast.void_type
 }
 
 pub fn (mut c Checker) unwrap_generic(typ ast.Type) ast.Type {
@@ -2396,12 +2451,13 @@ pub fn (mut c Checker) unwrap_generic(typ ast.Type) ast.Type {
 }
 
 // TODO node must be mut
-pub fn (mut c Checker) expr(node ast.Expr) ast.Type {
+pub fn (mut c Checker) expr(node_ ast.Expr) ast.Type {
 	c.expr_level++
 	defer {
 		c.expr_level--
 	}
 
+	mut node := unsafe { node_ }
 	if c.expr_level > checker.expr_level_cutoff_limit {
 		c.error('checker: too many expr levels: $c.expr_level ', node.pos())
 		return ast.void_type
@@ -3037,7 +3093,7 @@ pub fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 		if node.tok_kind == .assign && node.is_mut {
 			c.error('`mut` not allowed with `=` (use `:=` to declare a variable)', node.pos)
 		}
-		if obj := node.scope.find(node.name) {
+		if mut obj := node.scope.find(node.name) {
 			match mut obj {
 				ast.GlobalField {
 					node.kind = .global
@@ -3120,7 +3176,7 @@ pub fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 		else if !name.contains('.') && node.mod != 'builtin' {
 			name = '${node.mod}.$node.name'
 		}
-		if obj := c.file.global_scope.find(name) {
+		if mut obj := c.file.global_scope.find(name) {
 			match mut obj {
 				ast.ConstField {
 					if !(obj.is_pub || obj.mod == c.mod || c.pref.is_test) {
@@ -3224,10 +3280,11 @@ pub fn (mut c Checker) concat_expr(mut node ast.ConcatExpr) ast.Type {
 }
 
 // smartcast takes the expression with the current type which should be smartcasted to the target type in the given scope
-fn (mut c Checker) smartcast(expr ast.Expr, cur_type ast.Type, to_type_ ast.Type, mut scope ast.Scope) {
+fn (mut c Checker) smartcast(expr_ ast.Expr, cur_type ast.Type, to_type_ ast.Type, mut scope ast.Scope) {
 	sym := c.table.sym(cur_type)
 	to_type := if sym.kind == .interface_ { to_type_.ref() } else { to_type_ }
-	match expr {
+	mut expr := unsafe { expr_ }
+	match mut expr {
 		ast.SelectorExpr {
 			mut is_mut := false
 			mut smartcasts := []ast.Type{}
@@ -3713,8 +3770,8 @@ pub fn (mut c Checker) index_expr(mut node ast.IndexExpr) ast.Type {
 			'(note, that variables may be mutable but string values are always immutable, like in Go and Java)',
 			node.pos)
 	}
-	if !c.inside_unsafe && ((typ.is_ptr() && !typ.has_flag(.shared_f)
-		&& !node.left.is_auto_deref_var()) || typ.is_pointer()) {
+	if (typ.is_ptr() && !typ.has_flag(.shared_f) && !node.left.is_auto_deref_var())
+		|| typ.is_pointer() {
 		mut is_ok := false
 		if mut node.left is ast.Ident {
 			if mut node.left.obj is ast.Var {
@@ -3722,7 +3779,10 @@ pub fn (mut c Checker) index_expr(mut node ast.IndexExpr) ast.Type {
 				is_ok = node.left.obj.is_mut && node.left.obj.is_arg && !typ.deref().is_ptr()
 			}
 		}
-		if !is_ok && !c.pref.translated && !c.file.is_translated {
+		if !is_ok && node.index is ast.RangeExpr {
+			s := c.table.type_to_str(typ)
+			c.error('type `$s` does not support slicing', node.pos)
+		} else if !c.inside_unsafe && !is_ok && !c.pref.translated && !c.file.is_translated {
 			c.warn('pointer indexing is only allowed in `unsafe` blocks', node.pos)
 		}
 	}
@@ -3782,7 +3842,11 @@ pub fn (mut c Checker) index_expr(mut node ast.IndexExpr) ast.Type {
 // with this value.
 pub fn (mut c Checker) enum_val(mut node ast.EnumVal) ast.Type {
 	mut typ_idx := if node.enum_name == '' {
-		c.expected_type.idx()
+		if c.expected_type == ast.void_type && c.expected_expr_type != ast.void_type {
+			c.expected_expr_type.idx()
+		} else {
+			c.expected_type.idx()
+		}
 	} else {
 		c.table.find_type_idx(node.enum_name)
 	}
@@ -3829,7 +3893,7 @@ pub fn (mut c Checker) enum_val(mut node ast.EnumVal) ast.Type {
 		c.error('not an enum', node.pos)
 		return ast.void_type
 	}
-	if !(typ_sym.is_public || typ_sym.mod == c.mod) {
+	if !(typ_sym.is_pub || typ_sym.mod == c.mod) {
 		c.error('enum `$typ_sym.name` is private', node.pos)
 	}
 	info := typ_sym.enum_info()

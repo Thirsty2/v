@@ -205,7 +205,7 @@ pub fn (mut p Parser) set_path(path string) {
 }
 
 pub fn parse_file(path string, table &ast.Table, comments_mode scanner.CommentsMode, pref &pref.Preferences) &ast.File {
-	// NB: when comments_mode == .toplevel_comments,
+	// Note: when comments_mode == .toplevel_comments,
 	// the parser gives feedback to the scanner about toplevel statements, so that the scanner can skip
 	// all the tricky inner comments. This is needed because we do not have a good general solution
 	// for handling them, and should be removed when we do (the general solution is also needed for vfmt)
@@ -213,7 +213,7 @@ pub fn parse_file(path string, table &ast.Table, comments_mode scanner.CommentsM
 		eprintln('> ${@MOD}.${@FN} comments_mode: ${comments_mode:-20} | path: $path')
 	}
 	mut p := Parser{
-		scanner: scanner.new_scanner_file(path, comments_mode, pref)
+		scanner: scanner.new_scanner_file(path, comments_mode, pref) or { panic(err) }
 		comments_mode: comments_mode
 		table: table
 		pref: pref
@@ -238,7 +238,7 @@ pub fn parse_vet_file(path string, table_ &ast.Table, pref &pref.Preferences) (&
 		parent: 0
 	}
 	mut p := Parser{
-		scanner: scanner.new_scanner_file(path, .parse_comments, pref)
+		scanner: scanner.new_scanner_file(path, .parse_comments, pref) or { panic(err) }
 		comments_mode: .parse_comments
 		table: table_
 		pref: pref
@@ -2320,17 +2320,7 @@ pub fn (mut p Parser) name_expr() ast.Expr {
 	} else if (p.peek_tok.kind == .lcbr || (p.peek_tok.kind == .lt && lit0_is_capital))
 		&& (!p.inside_match || (p.inside_select && prev_tok_kind == .arrow && lit0_is_capital))
 		&& !p.inside_match_case && (!p.inside_if || p.inside_select)
-		&& (!p.inside_for || p.inside_select) && !known_var { // && (p.tok.lit[0].is_capital() || p.builtin_mod) {
-		// map.v has struct literal: map{field: expr}
-		if p.peek_tok.kind == .lcbr && !(p.builtin_mod
-			&& p.file_base in ['map.v', 'map_d_gcboehm_opt.v']) && p.tok.lit == 'map' {
-			// map{key_expr: val_expr}
-			p.check(.name)
-			p.check(.lcbr)
-			map_init := p.map_init()
-			p.check(.rcbr)
-			return map_init
-		}
+		&& (!p.inside_for || p.inside_select) && !known_var {
 		return p.struct_init(p.mod + '.' + p.tok.lit, false) // short_syntax: false
 	} else if p.peek_tok.kind == .lcbr && p.inside_if && lit0_is_capital && !known_var
 		&& language == .v {
@@ -2798,7 +2788,7 @@ fn (mut p Parser) parse_generic_types() ([]ast.Type, []string) {
 				cname: util.no_dots(name)
 				mod: p.mod
 				kind: .any
-				is_public: true
+				is_pub: true
 			})
 		}
 		types << ast.new_type(idx).set_flag(.generic)
@@ -2898,7 +2888,7 @@ fn (mut p Parser) string_expr() ast.Expr {
 		mut has_fmt := false
 		mut fwidth := 0
 		mut fwidthneg := false
-		// 987698 is a magic default value, unlikely to be present in user input. NB: 0 is valid precision
+		// 987698 is a magic default value, unlikely to be present in user input. Note: 0 is valid precision
 		mut precision := 987698
 		mut visible_plus := false
 		mut fill := false
@@ -3018,7 +3008,7 @@ fn (mut p Parser) module_decl() ast.Module {
 			p.error_with_pos('`module` and `$name` must be at same line', name_pos)
 			return mod_node
 		}
-		// NB: this shouldn't be reassigned into name_pos
+		// Note: this shouldn't be reassigned into name_pos
 		// as it creates a wrong position when extended
 		// to module_pos
 		n_pos := p.tok.pos()
@@ -3517,7 +3507,7 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 			is_flag: is_flag
 			is_multi_allowed: is_multi_allowed
 		}
-		is_public: is_pub
+		is_pub: is_pub
 	})
 	if idx == -1 {
 		p.error_with_pos('cannot register enum `$name`, another type with this name exists',
@@ -3571,7 +3561,7 @@ fn (mut p Parser) type_decl() ast.TypeDecl {
 		// function type: `type mycallback = fn(string, int)`
 		fn_name := p.prepend_mod(name)
 		fn_type := p.parse_fn_type(fn_name)
-		p.table.sym(fn_type).is_public = is_pub
+		p.table.sym(fn_type).is_pub = is_pub
 		type_pos = type_pos.extend(p.tok.pos())
 		comments = p.eat_comments(same_line: true)
 		return ast.FnTypeDecl{
@@ -3606,7 +3596,7 @@ fn (mut p Parser) type_decl() ast.TypeDecl {
 				is_generic: generic_types.len > 0
 				generic_types: generic_types
 			}
-			is_public: is_pub
+			is_pub: is_pub
 		})
 		if typ == ast.invalid_type_idx {
 			p.error_with_pos('cannot register sum type `$name`, another type with this name exists',
@@ -3646,7 +3636,7 @@ fn (mut p Parser) type_decl() ast.TypeDecl {
 			parent_type: parent_type
 			language: parent_sym.language
 		}
-		is_public: is_pub
+		is_pub: is_pub
 	})
 	type_end_pos := p.prev_tok.pos()
 	if idx == ast.invalid_type_idx {
@@ -3760,7 +3750,7 @@ fn (mut p Parser) rewind_scanner_to_current_token_in_new_mode() {
 
 // returns true if `varname` is known
 pub fn (mut p Parser) mark_var_as_used(varname string) bool {
-	if obj := p.scope.find(varname) {
+	if mut obj := p.scope.find(varname) {
 		match mut obj {
 			ast.Var {
 				obj.is_used = true

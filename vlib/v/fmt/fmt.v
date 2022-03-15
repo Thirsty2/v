@@ -25,7 +25,7 @@ pub mut:
 	out_imports        strings.Builder
 	indent             int
 	empty_line         bool
-	line_len           int    // the current line length, NB: it counts \t as 4 spaces, and starts at 0 after f.writeln
+	line_len           int    // the current line length, Note: it counts \t as 4 spaces, and starts at 0 after f.writeln
 	buffering          bool   // disables line wrapping for exprs that will be analyzed later
 	par_level          int    // how many parentheses are put around the current expression
 	array_init_break   []bool // line breaks after elements in hierarchy level of multi dimensional array
@@ -505,7 +505,8 @@ fn stmt_is_single_line(stmt ast.Stmt) bool {
 
 //=== General Expr-related methods and helpers ===//
 
-pub fn (mut f Fmt) expr(node ast.Expr) {
+pub fn (mut f Fmt) expr(node_ ast.Expr) {
+	mut node := unsafe { node_ }
 	if f.is_debug {
 		eprintln('expr: ${node.pos():-42} | node: ${node.type_name():-20} | $node.str()')
 	}
@@ -1802,7 +1803,7 @@ pub fn (mut f Fmt) enum_val(node ast.EnumVal) {
 }
 
 pub fn (mut f Fmt) ident(node ast.Ident) {
-	if mut node.info is ast.IdentVar {
+	if node.info is ast.IdentVar {
 		if node.info.is_mut {
 			f.write(node.info.share.str() + ' ')
 		}

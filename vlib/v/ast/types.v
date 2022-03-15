@@ -46,28 +46,28 @@ pub enum Language {
 pub fn pref_arch_to_table_language(pref_arch pref.Arch) Language {
 	return match pref_arch {
 		.amd64 {
-			Language.amd64
+			.amd64
 		}
 		.arm64 {
-			Language.arm64
+			.arm64
 		}
 		.arm32 {
-			Language.arm32
+			.arm32
 		}
 		.rv64 {
-			Language.rv64
+			.rv64
 		}
 		.rv32 {
-			Language.rv32
+			.rv32
 		}
 		.i386 {
-			Language.i386
+			.i386
 		}
 		.js_node, .js_browser, .js_freestanding {
-			Language.js
+			.js
 		}
 		._auto, ._max {
-			Language.v
+			.v
 		}
 	}
 }
@@ -84,15 +84,15 @@ pub struct TypeSymbol {
 pub:
 	parent_idx int
 pub mut:
-	info      TypeInfo
-	kind      Kind
-	name      string // the internal & source name of the type, i.e. `[5]int`.
-	cname     string // the name with no dots for use in the generated C code
-	methods   []Fn
-	mod       string
-	is_public bool
-	language  Language
-	idx       int
+	info     TypeInfo
+	kind     Kind
+	name     string // the internal & source name of the type, i.e. `[5]int`.
+	cname    string // the name with no dots for use in the generated C code
+	methods  []Fn
+	mod      string
+	is_pub   bool
+	language Language
+	idx      int
 }
 
 // max of 8
@@ -168,7 +168,7 @@ pub fn (t Type) nr_muls() int {
 [inline]
 pub fn (t Type) is_ptr() bool {
 	// any normal pointer, i.e. &Type, &&Type etc;
-	// NB: voidptr, charptr and byteptr are NOT included!
+	// Note: voidptr, charptr and byteptr are NOT included!
 	return (int(t) >> 16) & 0xff > 0
 }
 
@@ -253,7 +253,7 @@ fn (ts TypeSymbol) dbg_common(mut res []string) {
 	res << 'name: $ts.name'
 	res << 'cname: $ts.cname'
 	res << 'kind: $ts.kind'
-	res << 'is_public: $ts.is_public'
+	res << 'is_pub: $ts.is_pub'
 	res << 'language: $ts.language'
 }
 
@@ -427,7 +427,7 @@ pub const (
 	u8_type_idx            = 30
 )
 
-// NB: builtin_type_names must be in the same order as the idx consts above
+// Note: builtin_type_names must be in the same order as the idx consts above
 pub const builtin_type_names = ['void', 'voidptr', 'byteptr', 'charptr', 'i8', 'i16', 'int', 'i64',
 	'isize', 'byte', 'u16', 'u32', 'u64', 'usize', 'f32', 'f64', 'char', 'bool', 'none', 'string',
 	'rune', 'array', 'map', 'chan', 'any', 'float_literal', 'int_literal', 'thread', 'Error', 'u8']
@@ -1122,9 +1122,10 @@ pub fn (t &Table) type_to_str_using_aliases(typ Type, import_aliases map[string]
 				res = 'thread ' + t.type_to_str_using_aliases(rtype, import_aliases)
 			}
 		}
-		.alias, .any, .aggregate, .placeholder, .enum_ {
+		.alias, .any, .placeholder, .enum_ {
 			res = t.shorten_user_defined_typenames(res, import_aliases)
 		}
+		.aggregate {}
 	}
 	mut nr_muls := typ.nr_muls()
 	if typ.has_flag(.shared_f) {

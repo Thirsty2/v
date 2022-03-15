@@ -15,7 +15,7 @@ import v.depgraph
 import sync.pool
 
 const (
-	// NB: some of the words in c_reserved, are not reserved in C,
+	// Note: some of the words in c_reserved, are not reserved in C,
 	// but are in C++, or have special meaning in V, thus need escaping too.
 	// `small` should not be needed, but see: https://stackoverflow.com/questions/5874215/what-is-rpcndr-h
 	c_reserved     = ['array', 'auto', 'bool', 'break', 'calloc', 'case', 'char', 'class', 'complex',
@@ -1122,7 +1122,7 @@ fn (mut g Gen) cc_type(typ ast.Type, is_prefix_struct bool) string {
 	sym := g.table.sym(g.unwrap_generic(typ))
 	mut styp := sym.cname
 	// TODO: this needs to be removed; cgen shouldn't resolve generic types (job of checker)
-	match mut sym.info {
+	match sym.info {
 		ast.Struct, ast.Interface, ast.SumType {
 			if sym.info.is_generic {
 				mut sgtyps := '_T'
@@ -2001,7 +2001,7 @@ fn (mut g Gen) call_cfn_for_casting_expr(fname string, expr ast.Expr, exp_is_ptr
 	if !got_is_ptr {
 		if !expr.is_lvalue()
 			|| (expr is ast.Ident && (expr as ast.Ident).obj.is_simple_define_const()) {
-			// NB: the `_to_sumtype_` family of functions do call memdup internally, making
+			// Note: the `_to_sumtype_` family of functions do call memdup internally, making
 			// another duplicate with the HEAP macro is redundant, so use ADDR instead:
 			promotion_macro_name := if fname.contains('_to_sumtype_') { 'ADDR' } else { 'HEAP' }
 			g.write('${promotion_macro_name}($got_styp, (')
@@ -2733,7 +2733,7 @@ fn (mut g Gen) map_fn_ptrs(key_typ ast.TypeSymbol) (string, string, string, stri
 	return hash_fn, key_eq_fn, clone_fn, free_fn
 }
 
-fn (mut g Gen) expr(node ast.Expr) {
+fn (mut g Gen) expr(node_ ast.Expr) {
 	// println('cgen expr() line_nr=$node.pos.line_nr')
 	old_discard_or_result := g.discard_or_result
 	old_is_void_expr_stmt := g.is_void_expr_stmt
@@ -2743,7 +2743,8 @@ fn (mut g Gen) expr(node ast.Expr) {
 	} else {
 		g.discard_or_result = false
 	}
-	// NB: please keep the type names in the match here in alphabetical order:
+	// Note: please keep the type names in the match here in alphabetical order:
+	mut node := unsafe { node_ }
 	match mut node {
 		ast.ComptimeType {
 			g.error('g.expr(): Unhandled ComptimeType', node.pos)
@@ -3234,7 +3235,7 @@ fn (mut g Gen) selector_expr(node ast.SelectorExpr) {
 							dot := if field.typ.is_ptr() { '->' } else { '.' }
 							sum_type_deref_field += ')$dot'
 						}
-						if mut cast_sym.info is ast.Aggregate {
+						if cast_sym.info is ast.Aggregate {
 							agg_sym := g.table.sym(cast_sym.info.types[g.aggregate_type_idx])
 							sum_type_deref_field += '_$agg_sym.cname'
 						} else {
@@ -3694,7 +3695,7 @@ fn (mut g Gen) ident(node ast.Ident) {
 							}
 						}
 						dot := if is_ptr || is_auto_heap { '->' } else { '.' }
-						if mut cast_sym.info is ast.Aggregate {
+						if cast_sym.info is ast.Aggregate {
 							sym := g.table.sym(cast_sym.info.types[g.aggregate_type_idx])
 							g.write('${dot}_$sym.cname')
 						} else {
@@ -4144,7 +4145,7 @@ fn (mut g Gen) const_decl(node ast.ConstDecl) {
 				}
 			}
 			else {
-				// NB: -usecache uses prebuilt modules, each compiled with:
+				// Note: -usecache uses prebuilt modules, each compiled with:
 				// `v build-module vlib/module`
 				// combined with a top level program, that is compiled with:
 				// `v -usecache toplevel`
@@ -4359,10 +4360,6 @@ fn (mut g Gen) global_decl(node ast.GlobalDecl) {
 	}
 }
 
-fn (mut g Gen) go_back_out(n int) {
-	g.out.go_back(n)
-}
-
 fn (mut g Gen) assoc(node ast.Assoc) {
 	g.writeln('// assoc')
 	if node.typ == 0 {
@@ -4436,7 +4433,7 @@ fn (mut g Gen) write_init_function() {
 	if g.pref.prealloc {
 		g.writeln('prealloc_vinit();')
 	}
-	// NB: the as_cast table should be *before* the other constant initialize calls,
+	// Note: the as_cast table should be *before* the other constant initialize calls,
 	// because it may be needed during const initialization of builtin and during
 	// calling module init functions too, just in case they do fail...
 	g.write('\tas_cast_type_indexes = ')
@@ -4485,7 +4482,7 @@ fn (mut g Gen) write_init_function() {
 		// shared libraries need a way to call _vinit/2. For that purpose,
 		// provide a constructor/destructor pair, ensuring that all constants
 		// are initialized just once, and that they will be freed too.
-		// NB: os.args in this case will be [].
+		// Note: os.args in this case will be [].
 		g.writeln('__attribute__ ((constructor))')
 		g.writeln('void _vinit_caller() {')
 		g.writeln('\tstatic bool once = false; if (once) {return;} once = true;')
@@ -4554,7 +4551,7 @@ fn (mut g Gen) write_types(symbols []&ast.TypeSymbol) {
 		}
 		// sym := g.table.sym(typ)
 		mut name := sym.cname
-		match mut sym.info {
+		match sym.info {
 			ast.Struct {
 				if sym.info.is_generic {
 					continue
@@ -4728,7 +4725,7 @@ fn (g &Gen) sort_structs(typesa []&ast.TypeSymbol) []&ast.TypeSymbol {
 		}
 		// create list of deps
 		mut field_deps := []string{}
-		match mut sym.info {
+		match sym.info {
 			ast.ArrayFixed {
 				dep := g.table.sym(sym.info.elem_type).name
 				if dep in type_names {
@@ -5467,7 +5464,7 @@ fn (mut g Gen) interface_table() string {
 		mut methods_wrapper := strings.new_builder(100)
 		methods_wrapper.writeln('// Methods wrapper for interface "$interface_name"')
 		mut already_generated_mwrappers := map[string]int{}
-		iinidx_minimum_base := 1000 // NB: NOT 0, to avoid map entries set to 0 later, so `if already_generated_mwrappers[name] > 0 {` works.
+		iinidx_minimum_base := 1000 // Note: NOT 0, to avoid map entries set to 0 later, so `if already_generated_mwrappers[name] > 0 {` works.
 		mut current_iinidx := iinidx_minimum_base
 		for st in inter_info.types {
 			st_sym := g.table.sym(st)
@@ -5580,7 +5577,7 @@ static inline __shared__$interface_name ${shared_fn_name}(__shared__$cctype* x) 
 				mut name := method.name
 				if inter_info.parent_type.has_flag(.generic) {
 					parent_sym := g.table.sym(inter_info.parent_type)
-					match mut parent_sym.info {
+					match parent_sym.info {
 						ast.Struct, ast.Interface, ast.SumType {
 							name = g.generic_fn_name(parent_sym.info.concrete_types, method.name,
 								false)

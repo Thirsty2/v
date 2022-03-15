@@ -135,6 +135,15 @@ fn (mut g Gen) cmp_reg(reg Register, reg2 Register) {
 	g.println('cmp $reg, $reg2')
 }
 
+fn (mut g Gen) cmp_var_reg(var_name string, reg Register) {
+	g.write8(0x48) // 83 for 1 byte?
+	g.write8(0x39)
+	g.write8(0x45)
+	offset := g.get_var_offset(var_name)
+	g.write8(0xff - offset + 1)
+	g.println('cmp var `$var_name`, $reg')
+}
+
 fn (mut g Gen) cmp_var(var_name string, val int) {
 	g.write8(0x81) // 83 for 1 byte?
 	g.write8(0x7d)
@@ -458,11 +467,9 @@ pub fn (mut g Gen) gen_loop_end(to int, label int) {
 	g.jl(label)
 }
 
-pub fn (mut g Gen) allocate_string(s string, opsize int) int {
-	g.strings << s
+pub fn (mut g Gen) allocate_string(s string, opsize int, typ RelocType) int {
 	str_pos := g.buf.len + opsize
-	g.str_pos << str_pos
-	g.strs << String{s, str_pos}
+	g.strs << String{s, str_pos, typ}
 	return str_pos
 }
 
@@ -507,7 +514,7 @@ pub fn (mut g Gen) inline_strlen(r Register) {
 
 // TODO: strlen of string at runtime
 pub fn (mut g Gen) gen_print_reg(r Register, n int, fd int) {
-	mystrlen := true
+	mystrlen := true // if n < 0 maybe?
 	g.mov_reg(.rsi, r)
 	if mystrlen {
 		g.inline_strlen(.rsi)
@@ -550,24 +557,20 @@ pub fn (mut g Gen) gen_print(s string, fd int) {
 		g.apicall('GetStdHandle')
 		g.mov_reg(.rcx, .rax)
 		// g.mov64(.rdx, g.allocate_string(s, 3))
-		g.lea(.rdx, g.allocate_string(s, 3))
+		g.lea(.rdx, g.allocate_string(s, 3, .abs64))
 		g.mov(.r8, s.len) // string length
 		g.write([byte(0x4c), 0x8d, 0x4c, 0x24, 0x20]) // lea r9, [rsp+0x20]
 		g.write([byte(0x48), 0xc7, 0x44, 0x24, 0x20])
 		g.write32(0) // mov qword[rsp+0x20], 0
 		// g.mov(.r9, rsp+0x20)
 		g.apicall('WriteFile')
-		return
+	} else {
+		g.mov(.eax, g.nsyscall_write())
+		g.mov(.edi, fd)
+		g.learel(.rsi, g.allocate_string(s, 3, .rel32)) // for rsi its 2
+		g.mov(.edx, s.len) // len
+		g.syscall()
 	}
-	//
-	// qq := s + '\n'
-	//
-	g.mov(.eax, g.nsyscall_write())
-	g.mov(.edi, fd)
-	// segment_start +  0x9f) // str pos // placeholder
-	g.mov64(.rsi, g.allocate_string(s, 2)) // for rsi its 2
-	g.mov(.edx, s.len) // len
-	g.syscall()
 }
 
 fn (mut g Gen) nsyscall_write() int {
@@ -636,6 +639,49 @@ pub fn (mut g Gen) gen_amd64_exit(expr ast.Expr) {
 		g.syscall()
 	}
 	g.trap() // should never be reached, just in case
+}
+
+fn (mut g Gen) relpc(dst Register, src Register) {
+	//  488d1d 00000000 lea 0(%rip),%dst
+	//  4801d8          add %dst, %src
+	match dst {
+		.rax {
+			match src {
+				.rsi {
+					g.write([byte(0x48), 0x8d, 0x35, 0x00, 0x00, 0x00, 0x00]) // lea rsi, rip
+					g.write([byte(0x48), 0x01, 0xf0]) // add rax, rsi
+				}
+				.rbx {
+					g.write([byte(0x48), 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00])
+					g.write([byte(0x48), 0x01, 0xd8])
+				}
+				else {
+					panic('relpc requires .rax, {.rsi,.rbx}')
+				}
+			}
+		}
+		else {
+			panic('relpc requires .rax, {.rsi,.rbx}')
+		}
+	}
+}
+
+fn (mut g Gen) learel(reg Register, val int) {
+	g.write8(0x48)
+	g.write8(0x8d)
+	match reg {
+		.rax {
+			g.write8(0x05)
+		}
+		.rsi {
+			g.write8(0x35)
+		}
+		else {
+			g.n_error('learel must use rsi or rax')
+		}
+	}
+	g.write32(val)
+	g.println('lea $reg, rip + $val')
 }
 
 fn (mut g Gen) lea(reg Register, val int) {
@@ -827,7 +873,9 @@ fn (mut g Gen) add_reg(a Register, b Register) {
 }
 
 fn (mut g Gen) mov_reg(a Register, b Register) {
-	if a == .rbp && b == .rsp {
+	if a == .rax && b == .rsi {
+		g.write([byte(0x48), 0x89, 0xf0])
+	} else if a == .rbp && b == .rsp {
 		g.write8(0x48)
 		g.write8(0x89)
 	} else if a == .rdx && b == .rax {
@@ -995,7 +1043,7 @@ fn (mut g Gen) assign_stmt(node ast.AssignStmt) {
 								g.mov_reg_to_var(offset, .rax)
 							}
 							ast.InfixExpr {
-								eprintln('assign')
+								// eprintln('assign')
 								// dump(node.left[i])
 								offset := g.get_var_offset('i') // node.left[i])
 								g.mov_reg_to_var(offset, native.fn_arg_registers[i])
@@ -1003,26 +1051,26 @@ fn (mut g Gen) assign_stmt(node ast.AssignStmt) {
 							/*
 							ast.int_type_idx {
 								g.expr(node.left[i])
-match node.left[i] {
-ast.IndexExpr {
-								ie := node.left[i] as ast.IndexExpr
-								bracket := name.index('[') or {
-									g.v_error('bracket expected', node.pos)
-									exit(1)
+								match node.left[i] {
+								ast.IndexExpr {
+									ie := node.left[i] as ast.IndexExpr
+									bracket := name.index('[') or {
+										g.v_error('bracket expected', node.pos)
+										exit(1)
+									}
+									var_name := name[0 .. bracket]
+									mut dest := g.get_var_offset(var_name)
+									index := ie.index as ast.IntegerLiteral
+									dest += index.val.int() * 8
+									// TODO check if out of bounds access
+									g.mov(.rax, right.val.int())
+									g.mov_reg_to_var(dest, .rax)
+									// eprintln('${var_name}[$index] = ${right.val.int()}')
+								} else {
+									dump(node)
+									g.v_error('oops', node.pos)
 								}
-								var_name := name[0 .. bracket]
-								mut dest := g.get_var_offset(var_name)
-								index := ie.index as ast.IntegerLiteral
-								dest += index.val.int() * 8
-								// TODO check if out of bounds access
-								g.mov(.rax, right.val.int())
-								g.mov_reg_to_var(dest, .rax)
-								// eprintln('${var_name}[$index] = ${right.val.int()}')
-} else {
-dump(node)
-g.v_error('oops', node.pos)
-}
-}
+								}
 							}
 							*/
 							else {
@@ -1109,7 +1157,8 @@ g.v_error('oops', node.pos)
 							pos += 8
 						}
 						ast.StringLiteral {
-							g.mov64(.rsi, g.allocate_string('$e.val', 2)) // for rsi its 2
+							// TODO: use learel
+							g.mov64(.rsi, g.allocate_string('$e.val', 2, .abs64)) // for rsi its 2
 							g.mov_reg_to_var(pos, .rsi)
 							pos += 8
 						}
@@ -1148,7 +1197,7 @@ g.v_error('oops', node.pos)
 			ast.StringLiteral {
 				dest := g.allocate_var(name, 4, 0)
 				ie := node.right[i] as ast.StringLiteral
-				g.mov64(.rsi, g.allocate_string(ie.str(), 2)) // for rsi its 2
+				g.learel(.rsi, g.allocate_string(ie.val.str(), 3, .rel32))
 				g.mov_reg_to_var(dest, .rsi)
 			}
 			ast.CallExpr {
@@ -1156,6 +1205,9 @@ g.v_error('oops', node.pos)
 				g.call_fn(right)
 				g.mov_reg_to_var(dest, .rax)
 				g.mov_var_to_reg(.rsi, dest)
+			}
+			ast.SelectorExpr {
+				g.v_error('unhandled selectors', node.pos)
 			}
 			ast.GoExpr {
 				g.v_error('threads not implemented for the native backend', node.pos)
@@ -1174,6 +1226,14 @@ g.v_error('oops', node.pos)
 					}
 				}
 			}
+			ast.FloatLiteral {
+				g.v_error('floating point arithmetic not yet implemented for the native backend',
+					node.pos)
+			}
+			ast.TypeOf {
+				g.gen_typeof_expr(node.right[i] as ast.TypeOf, true)
+				g.mov_reg(.rsi, .rax)
+			}
 			else {
 				// dump(node)
 				g.v_error('unhandled assign_stmt expression: $right.type_name()', right.pos())
@@ -1188,13 +1248,13 @@ fn (mut g Gen) infix_expr(node ast.InfixExpr) {
 	if node.left is ast.InfixExpr {
 		g.n_error('only simple expressions are supported right now (not more than 2 operands)')
 	}
-	match mut node.left {
+	match node.left {
 		ast.Ident {
 			g.mov_var_to_reg(.eax, g.get_var_offset(node.left.name))
 		}
 		else {}
 	}
-	if mut node.right is ast.Ident {
+	if node.right is ast.Ident {
 		var_offset := g.get_var_offset(node.right.name)
 		match node.op {
 			.plus { g.add8_var(.eax, var_offset) }
@@ -1254,6 +1314,10 @@ fn (mut g Gen) gen_asm_stmt_amd64(asm_node ast.AsmStmt) {
 					line += a.val.str()
 					imm = if a.val { 1 } else { 0 }
 				}
+				ast.CharLiteral {
+					line += a.val.str()
+					imm = a.val.int()
+				}
 				/*
 				ast.AsmAddressing {
 				}
@@ -1261,11 +1325,11 @@ fn (mut g Gen) gen_asm_stmt_amd64(asm_node ast.AsmStmt) {
 				}
 				ast.AsmDisp {
 				}
-				ast.CharLiteral {
-				}
-				ast.FloatLiteral {
-				}
 				*/
+				ast.FloatLiteral {
+					g.v_error('floating point arithmetic is not yet implemented for the native backend',
+						asm_node.pos)
+				}
 				string {
 					// XXX
 					g.v_error('no strings allowed in this context', asm_node.pos)
@@ -1386,13 +1450,14 @@ fn (mut g Gen) cjmp_op(op token.Kind) int {
 }
 
 fn (mut g Gen) condition(infix_expr ast.InfixExpr, neg bool) int {
-	match mut infix_expr.left {
+	match infix_expr.left {
 		ast.IntegerLiteral {
-			match mut infix_expr.right {
+			match infix_expr.right {
 				ast.IntegerLiteral {
 					// 3 < 4
 					a0 := infix_expr.left.val.int()
 					// a0 := (infix_expr.left as ast.IntegerLiteral).val.int()
+					// XXX this will not compile
 					a1 := (infix_expr.right as ast.IntegerLiteral).val.int()
 					// TODO. compute at compile time
 					g.mov(.eax, a0)
@@ -1411,7 +1476,7 @@ fn (mut g Gen) condition(infix_expr ast.InfixExpr, neg bool) int {
 			}
 		}
 		ast.Ident {
-			match mut infix_expr.right {
+			match infix_expr.right {
 				ast.IntegerLiteral {
 					// var < 4
 					lit := infix_expr.right as ast.IntegerLiteral
@@ -1489,13 +1554,24 @@ fn (mut g Gen) for_stmt(node ast.ForStmt) {
 		return
 	}
 	infix_expr := node.cond as ast.InfixExpr
-	// g.mov(.eax, 0x77777777)
 	mut jump_addr := 0 // location of `jne *00 00 00 00*`
 	start := g.pos()
-	match mut infix_expr.left {
+	match infix_expr.left {
 		ast.Ident {
-			lit := infix_expr.right as ast.IntegerLiteral
-			g.cmp_var(infix_expr.left.name, lit.val.int())
+			match infix_expr.right {
+				ast.Ident {
+					var_offset := g.get_var_offset(infix_expr.right.name)
+					g.mov_var_to_reg(.rax, var_offset)
+					g.cmp_var_reg(infix_expr.left.name, .rax)
+				}
+				ast.IntegerLiteral {
+					lit := infix_expr.right as ast.IntegerLiteral
+					g.cmp_var(infix_expr.left.name, lit.val.int())
+				}
+				else {
+					g.n_error('unhandled expression type')
+				}
+			}
 			match infix_expr.left.tok_kind {
 				.lt {
 					jump_addr = g.cjmp(.jge)
@@ -1595,6 +1671,6 @@ pub fn (mut g Gen) allocate_var(name string, size int, initial_val int) int {
 	// Generate the value assigned to the variable
 	g.write32(initial_val)
 	// println('allocate_var(size=$size, initial_val=$initial_val)')
-	g.println('mov [rbp-$n.hex2()], $initial_val (Allocate var `$name`)')
+	g.println('mov [rbp-$n.hex2()], $initial_val ; Allocate var `$name`')
 	return g.stack_var_pos
 }

@@ -21,6 +21,12 @@ pub fn (mut c Checker) if_expr(mut node ast.IfExpr) ast.Type {
 	}
 	expr_required := c.expected_type != ast.void_type
 	former_expected_type := c.expected_type
+	if node_is_expr {
+		c.expected_expr_type = c.expected_type
+		defer {
+			c.expected_expr_type = ast.void_type
+		}
+	}
 	node.typ = ast.void_type
 	mut nbranches_with_return := 0
 	mut nbranches_without_return := 0
@@ -303,12 +309,17 @@ fn (mut c Checker) smartcast_if_conds(node ast.Expr, mut scope ast.Scope) {
 					c.error('cannot use type `$expect_str` as type `$expr_str`', node.pos)
 				}
 				if node.left in [ast.Ident, ast.SelectorExpr] && node.right is ast.TypeNode {
-					is_variable := if mut node.left is ast.Ident {
+					is_variable := if node.left is ast.Ident {
 						node.left.kind == .variable
 					} else {
 						true
 					}
 					if is_variable {
+						if (node.left is ast.Ident && (node.left as ast.Ident).is_mut)
+							|| (node.left is ast.SelectorExpr
+							&& (node.left as ast.SelectorExpr).is_mut) {
+							c.fail_if_immutable(node.left)
+						}
 						if left_sym.kind in [.interface_, .sum_type] {
 							c.smartcast(node.left, node.left_type, right_type, mut scope)
 						}
