@@ -36,28 +36,8 @@ fn (mut c Checker) comptime_call(mut node ast.ComptimeCall) ast.Type {
 			is_vweb: true
 		}
 		mut c2 := new_checker(c.table, pref2)
+		c2.comptime_call_pos = node.pos.pos
 		c2.check(node.vweb_tmpl)
-		mut caller_scope := c.fn_scope.innermost(node.pos.pos)
-		mut i := 0 // tmp counter var for skipping first three tmpl vars
-		for k, _ in c2.file.scope.children[0].objects {
-			if i < 2 {
-				// Skip first three because they are tmpl vars see vlib/vweb/tmpl/tmpl.v
-				i++
-				continue
-			}
-			tmpl_obj := unsafe { c2.file.scope.children[0].objects[k] }
-			if tmpl_obj is ast.Var {
-				if mut caller_var := caller_scope.find_var(tmpl_obj.name) {
-					// var is used in the tmpl so mark it as used in the caller
-					caller_var.is_used = true
-					// update props from the caller scope var to the tmpl scope var
-					c2.file.scope.children[0].objects[k] = ast.Var{
-						...(*caller_var)
-						pos: tmpl_obj.pos
-					}
-				}
-			}
-		}
 		c.warnings << c2.warnings
 		c.errors << c2.errors
 		c.notices << c2.notices
@@ -147,30 +127,8 @@ fn (mut c Checker) eval_comptime_const_expr(expr ast.Expr, nlevel int) ?ast.Comp
 		//	return expr.val.i64()
 		// }
 		ast.SizeOf {
-			xtype := expr.typ
-			if xtype.is_real_pointer() {
-				if c.pref.m64 {
-					return 8 // 64bit platform
-				}
-				return 4 // 32bit platform
-			}
-			if int(xtype) == xtype.idx() {
-				match xtype {
-					ast.char_type { return 1 }
-					ast.i8_type { return 1 }
-					ast.i16_type { return 2 }
-					ast.int_type { return 4 }
-					ast.i64_type { return 8 }
-					//
-					ast.byte_type { return 1 }
-					ast.u8_type { return 1 }
-					ast.u16_type { return 2 }
-					ast.u32_type { return 4 }
-					ast.u64_type { return 8 }
-					else {}
-				}
-			}
-			return none
+			s, _ := c.table.type_size(expr.typ)
+			return s
 		}
 		ast.FloatLiteral {
 			x := expr.val.f64()
@@ -215,7 +173,7 @@ fn (mut c Checker) eval_comptime_const_expr(expr ast.Expr, nlevel int) ?ast.Comp
 			}
 			//
 			if expr.typ == ast.byte_type {
-				return cast_expr_value.byte() or { return none }
+				return cast_expr_value.u8() or { return none }
 			}
 			if expr.typ == ast.u16_type {
 				return cast_expr_value.u16() or { return none }
@@ -306,7 +264,7 @@ fn (mut c Checker) eval_comptime_const_expr(expr ast.Expr, nlevel int) ?ast.Comp
 					.unsigned_right_shift { return i64(u64(left) >>> right) }
 					else { return none }
 				}
-			} else if left is byte && right is byte {
+			} else if left is u8 && right is u8 {
 				match expr.op {
 					.plus { return left + right }
 					.minus { return left - right }

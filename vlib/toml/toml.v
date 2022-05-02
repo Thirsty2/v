@@ -108,6 +108,8 @@ pub fn parse_text(text string) ?Doc {
 // parse parses the TOML document provided in `toml`.
 // parse automatically try to determine if the type of `toml` is a file or text.
 // For explicit parsing of input types see `parse_file` or `parse_text`.
+[deprecated: 'use parse_file or parse_text instead']
+[deprecated_after: '2022-06-18']
 pub fn parse(toml string) ?Doc {
 	mut input_config := input.auto_config(toml) ?
 	scanner_config := scanner.Config{
@@ -129,7 +131,7 @@ pub fn parse_dotted_key(key string) ?[]string {
 	mut out := []string{}
 	mut buf := ''
 	mut in_string := false
-	mut delim := byte(` `)
+	mut delim := u8(` `)
 	for ch in key {
 		if ch in [`"`, `'`] {
 			if !in_string {

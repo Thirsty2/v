@@ -88,7 +88,7 @@ const (
 		'cflags', 'path', 'arch']
 )
 
-[heap]
+[heap; minify]
 pub struct Preferences {
 pub mut:
 	os          OS // the OS to compile for
@@ -110,7 +110,7 @@ pub mut:
 	test_runner       string   // can be 'simple' (fastest, but much less detailed), 'tap', 'normal'
 	profile_file      string   // the profile results will be stored inside profile_file
 	profile_no_inline bool     // when true, [inline] functions would not be profiled
-	profile_fns       []string // when set, profiling will be off by default, but inside these functions (and what they call) it will be on.	
+	profile_fns       []string // when set, profiling will be off by default, but inside these functions (and what they call) it will be on.
 	translated        bool     // `v translate doom.v` are we running V code translated from C? allow globals, ++ expressions, etc
 	is_prod           bool     // use "-O2"
 	obfuscate         bool     // `v -obf program.v`, renames functions to "f_XXX"
@@ -199,6 +199,7 @@ pub mut:
 	nofloat             bool              // for low level code, like kernels: replaces f32 with u32 and f64 with u64
 	// checker settings:
 	checker_match_exhaustive_cutoff_limit int = 12
+	thread_stack_size                     int = 8388608 // Change with `-thread-stack-size 4194304`. Note: on macos it was 524288, which is too small for more complex programs with many nested callexprs.
 }
 
 pub fn parse_args(known_external_commands []string, args []string) (&Preferences, string) {
@@ -571,6 +572,10 @@ pub fn parse_args_and_show_errors(known_external_commands []string, args []strin
 				res.message_limit = cmdline.option(current_args, arg, '5').int()
 				i++
 			}
+			'-thread-stack-size' {
+				res.thread_stack_size = cmdline.option(current_args, arg, res.thread_stack_size.str()).int()
+				i++
+			}
 			'-cc' {
 				res.ccompiler = cmdline.option(current_args, '-cc', 'cc')
 				res.build_options << '$arg "$res.ccompiler"'
@@ -634,7 +639,7 @@ pub fn parse_args_and_show_errors(known_external_commands []string, args []strin
 					eprintln('Use `v $arg` instead.')
 					exit(1)
 				}
-				if arg[0] == `-` {
+				if arg.len != 0 && arg[0] == `-` {
 					if arg[1..] in pref.list_of_flags_with_param {
 						// skip parameter
 						i++

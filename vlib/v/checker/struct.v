@@ -25,6 +25,10 @@ pub fn (mut c Checker) struct_decl(mut node ast.StructDecl) {
 				}
 			}
 		}
+		if struct_sym.info.is_minify {
+			node.fields.sort_with_compare(minify_sort_fn)
+			struct_sym.info.fields.sort_with_compare(minify_sort_fn)
+		}
 		for attr in node.attrs {
 			if attr.name == 'typedef' && node.language != .c {
 				c.error('`typedef` attribute can only be used with C structs', node.pos)
@@ -53,6 +57,16 @@ pub fn (mut c Checker) struct_decl(mut node ast.StructDecl) {
 					if c.table.unaliased_type(field.typ) == struct_typ_idx {
 						c.error('field `$field.name` is part of `$node.name`, they can not both have the same type',
 							field.type_pos)
+					}
+				}
+				field_sym := c.table.sym(field.typ)
+				if field_sym.kind == .function {
+					fn_info := field_sym.info as ast.FnType
+					c.ensure_type_exists(fn_info.func.return_type, fn_info.func.return_type_pos) or {
+						return
+					}
+					for param in fn_info.func.params {
+						c.ensure_type_exists(param.typ, param.type_pos) or { return }
 					}
 				}
 			}
@@ -111,6 +125,62 @@ pub fn (mut c Checker) struct_decl(mut node ast.StructDecl) {
 			c.error('generic struct declaration must specify the generic type names, e.g. Foo<T>',
 				node.pos)
 		}
+	}
+}
+
+fn minify_sort_fn(a &ast.StructField, b &ast.StructField) int {
+	if a.typ == b.typ {
+		return 0
+	}
+	// push all bool fields to the end of the struct
+	if a.typ == ast.bool_type_idx {
+		if b.typ == ast.bool_type_idx {
+			return 0
+		}
+		return 1
+	} else if b.typ == ast.bool_type_idx {
+		return -1
+	}
+
+	mut t := global_table
+	a_sym := t.sym(a.typ)
+	b_sym := t.sym(b.typ)
+
+	// push all non-flag enums to the end too, just before the bool fields
+	// TODO: support enums with custom field values as well
+	if a_sym.info is ast.Enum {
+		if !a_sym.info.is_flag && !a_sym.info.uses_exprs {
+			if b_sym.kind == .enum_ {
+				a_nr_vals := (a_sym.info as ast.Enum).vals.len
+				b_nr_vals := (b_sym.info as ast.Enum).vals.len
+				return if a_nr_vals > b_nr_vals {
+					-1
+				} else if a_nr_vals < b_nr_vals {
+					1
+				} else {
+					0
+				}
+			}
+			return 1
+		}
+	} else if b_sym.info is ast.Enum {
+		if !b_sym.info.is_flag && !b_sym.info.uses_exprs {
+			return -1
+		}
+	}
+
+	a_size, a_align := t.type_size(a.typ)
+	b_size, b_align := t.type_size(b.typ)
+	return if a_align > b_align {
+		-1
+	} else if a_align < b_align {
+		1
+	} else if a_size > b_size {
+		-1
+	} else if a_size < b_size {
+		1
+	} else {
+		0
 	}
 }
 
@@ -257,6 +327,11 @@ pub fn (mut c Checker) struct_init(mut node ast.StructInit) ast.Type {
 						node.pos)
 				}
 			}
+			mut info_fields_sorted := []ast.StructField{}
+			if node.is_short {
+				info_fields_sorted = info.fields.clone()
+				info_fields_sorted.sort(a.i < b.i)
+			}
 			mut inited_fields := []string{}
 			for i, mut field in node.fields {
 				mut field_info := ast.StructField{}
@@ -267,7 +342,7 @@ pub fn (mut c Checker) struct_init(mut node ast.StructInit) ast.Type {
 						// We should just stop here.
 						break
 					}
-					field_info = info.fields[i]
+					field_info = info_fields_sorted[i]
 					field_name = field_info.name
 					node.fields[i].name = field_name
 				} else {
@@ -322,6 +397,15 @@ pub fn (mut c Checker) struct_init(mut node ast.StructInit) ast.Type {
 						&& field.expr.str() != '0' {
 						c.error('reference field must be initialized with reference',
 							field.pos)
+					}
+				}
+				if field_type_sym.kind == .function && field_type_sym.language == .v {
+					pos := field.expr.pos()
+					if mut field.expr is ast.AnonFn {
+						if field.expr.decl.no_body {
+							c.error('cannot initialize the fn field with anonymous fn that does not have a body',
+								pos)
+						}
 					}
 				}
 				node.fields[i].typ = expr_type

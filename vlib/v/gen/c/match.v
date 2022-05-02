@@ -61,8 +61,7 @@ fn (mut g Gen) match_expr(node ast.MatchExpr) {
 		}
 		g.inside_match_optional = true
 	}
-	if node.cond in [ast.Ident, ast.SelectorExpr, ast.IntegerLiteral, ast.StringLiteral,
-		ast.FloatLiteral] {
+	if node.cond in [ast.Ident, ast.SelectorExpr, ast.IntegerLiteral, ast.StringLiteral, ast.FloatLiteral] {
 		cond_var = g.expr_string(node.cond)
 	} else {
 		line := if is_expr {
@@ -153,7 +152,8 @@ fn (mut g Gen) match_expr_sumtype(node ast.MatchExpr, is_expr bool, cond_var str
 						typ := branch.exprs[sumtype_index] as ast.TypeNode
 						branch_sym := g.table.sym(g.unwrap_generic(typ.typ))
 						g.write('${dot_or_ptr}_typ == _${sym.cname}_${branch_sym.cname}_index')
-					} else if branch.exprs[sumtype_index] is ast.None && sym.name == 'IError' {
+					} else if branch.exprs[sumtype_index] is ast.None
+						&& sym.idx == ast.error_type_idx {
 						g.write('${dot_or_ptr}_typ == _IError_None___index')
 					}
 				}
@@ -233,7 +233,7 @@ fn (mut g Gen) match_expr_switch(node ast.MatchExpr, is_expr bool, cond_var stri
 					}
 					g.writeln(') {')
 					g.stmts_with_tmp_var(range_branch.stmts, tmp_var)
-					g.writeln('break;')
+					g.writeln('\tbreak;')
 					g.writeln('}')
 				}
 				g.indent--
@@ -259,7 +259,8 @@ fn (mut g Gen) match_expr_switch(node ast.MatchExpr, is_expr bool, cond_var stri
 		}
 		g.stmts_with_tmp_var(branch.stmts, tmp_var)
 		g.expected_cast_type = 0
-		g.writeln('} break;')
+		g.writeln('\tbreak;')
+		g.writeln('}')
 		g.indent--
 	}
 	if range_branches.len > 0 && !default_generated {
@@ -297,7 +298,7 @@ fn (mut g Gen) match_expr_switch(node ast.MatchExpr, is_expr bool, cond_var stri
 			}
 			g.writeln(') {')
 			g.stmts_with_tmp_var(range_branch.stmts, tmp_var)
-			g.writeln('break;')
+			g.writeln('\tbreak;')
 			g.writeln('}')
 		}
 		g.indent--

@@ -92,6 +92,7 @@ pub fn (sk SymbolKind) str() string {
 	}
 }
 
+[minify]
 pub struct Doc {
 pub mut:
 	prefs     &pref.Preferences = new_vdoc_preferences()
@@ -121,6 +122,7 @@ pub mut:
 	platform            Platform
 }
 
+[minify]
 pub struct DocNode {
 pub mut:
 	name        string
@@ -260,7 +262,11 @@ pub fn (mut d Doc) stmt(stmt ast.Stmt, filename string) ?DocNode {
 		}
 		ast.FnDecl {
 			if stmt.is_deprecated {
-				node.tags << 'deprecated'
+				for sa in stmt.attrs {
+					if sa.name.starts_with('deprecated') {
+						node.tags << sa.str()
+					}
+				}
 			}
 			if stmt.is_unsafe {
 				node.tags << 'unsafe'

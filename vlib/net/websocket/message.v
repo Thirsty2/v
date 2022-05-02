@@ -11,7 +11,7 @@ const (
 
 // Fragment represents a websocket data fragment
 struct Fragment {
-	data   []byte // included data payload data in a fragment
+	data   []u8   // included data payload data in a fragment
 	opcode OPCode // interpretation of the payload data
 }
 
@@ -22,14 +22,14 @@ mut:
 	header_len int = 2
 	// size of total frame
 	frame_size  int = 2
-	fin         bool    // true if final fragment of message
-	rsv1        bool    // reserved for future use in websocket RFC
-	rsv2        bool    // reserved for future use in websocket RFC
-	rsv3        bool    // reserved for future use in websocket RFC
-	opcode      OPCode  // interpretation of the payload data
-	has_mask    bool    // true if the payload data is masked
-	payload_len int     // payload length
-	masking_key [4]byte // all frames from client to server is masked with this key
+	fin         bool   // true if final fragment of message
+	rsv1        bool   // reserved for future use in websocket RFC
+	rsv2        bool   // reserved for future use in websocket RFC
+	rsv3        bool   // reserved for future use in websocket RFC
+	opcode      OPCode // interpretation of the payload data
+	has_mask    bool   // true if the payload data is masked
+	payload_len int    // payload length
+	masking_key [4]u8  // all frames from client to server is masked with this key
 }
 
 const (
@@ -81,12 +81,12 @@ fn is_data_frame(opcode OPCode) bool {
 }
 
 // read_payload reads the message payload from the socket
-fn (mut ws Client) read_payload(frame &Frame) ?[]byte {
+fn (mut ws Client) read_payload(frame &Frame) ?[]u8 {
 	if frame.payload_len == 0 {
-		return []byte{}
+		return []u8{}
 	}
-	mut buffer := []byte{cap: frame.payload_len}
-	mut read_buf := [1]byte{}
+	mut buffer := []u8{cap: frame.payload_len}
+	mut read_buf := [1]u8{}
 	mut bytes_read := 0
 	for bytes_read < frame.payload_len {
 		len := ws.socket_read_ptr(&read_buf[0], 1) ?
@@ -109,7 +109,7 @@ fn (mut ws Client) read_payload(frame &Frame) ?[]byte {
 
 // validate_utf_8 validates payload for valid utf8 encoding
 // - Future implementation needs to support fail fast utf errors for strict autobahn conformance
-fn (mut ws Client) validate_utf_8(opcode OPCode, payload []byte) ? {
+fn (mut ws Client) validate_utf_8(opcode OPCode, payload []u8) ? {
 	if opcode in [.text_frame, .close] && !utf8.validate(payload.data, payload.len) {
 		ws.logger.error('malformed utf8 payload, payload len: ($payload.len)')
 		ws.send_error_event('Recieved malformed utf8.')
@@ -181,7 +181,7 @@ pub fn (mut ws Client) read_next_message() ?Message {
 }
 
 // payload_from_fragments returs the whole paylaod from fragmented message
-fn (ws Client) payload_from_fragments(fin_payload []byte) ?[]byte {
+fn (ws Client) payload_from_fragments(fin_payload []u8) ?[]u8 {
 	mut total_size := 0
 	for f in ws.fragments {
 		if f.data.len > 0 {
@@ -190,9 +190,9 @@ fn (ws Client) payload_from_fragments(fin_payload []byte) ?[]byte {
 	}
 	total_size += fin_payload.len
 	if total_size == 0 {
-		return []byte{}
+		return []u8{}
 	}
-	mut total_buffer := []byte{cap: total_size}
+	mut total_buffer := []u8{cap: total_size}
 	for f in ws.fragments {
 		if f.data.len > 0 {
 			total_buffer << f.data
@@ -209,10 +209,10 @@ fn (ws Client) opcode_from_fragments() OPCode {
 
 // parse_frame_header parses next message by decoding the incoming frames
 pub fn (mut ws Client) parse_frame_header() ?Frame {
-	mut buffer := [256]byte{}
+	mut buffer := [256]u8{}
 	mut bytes_read := 0
 	mut frame := Frame{}
-	mut rbuff := [1]byte{}
+	mut rbuff := [1]u8{}
 	mut mask_end_byte := 0
 	for ws.state == .open {
 		read_bytes := ws.socket_read_ptr(&rbuff[0], 1) ?
@@ -223,7 +223,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 		buffer[bytes_read] = rbuff[0]
 		bytes_read++
 		// parses the first two header bytes to get basic frame information
-		if bytes_read == u64(websocket.header_len_offset) {
+		if bytes_read == websocket.header_len_offset {
 			frame.fin = (buffer[0] & 0x80) == 0x80
 			frame.rsv1 = (buffer[0] & 0x40) == 0x40
 			frame.rsv2 = (buffer[0] & 0x20) == 0x20
@@ -249,7 +249,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 				break
 			}
 		}
-		if frame.payload_len == 126 && bytes_read == u64(websocket.extended_payload16_end_byte) {
+		if frame.payload_len == 126 && bytes_read == websocket.extended_payload16_end_byte {
 			frame.header_len += 2
 			frame.payload_len = 0
 			frame.payload_len |= int(u32(buffer[2]) << 8)
@@ -259,7 +259,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 				break
 			}
 		}
-		if frame.payload_len == 127 && bytes_read == u64(websocket.extended_payload64_end_byte) {
+		if frame.payload_len == 127 && bytes_read == websocket.extended_payload64_end_byte {
 			frame.header_len += 8
 			// these shift operators needs 64 bit on clang with -prod flag
 			mut payload_len := u64(0)
@@ -288,7 +288,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 }
 
 // unmask_sequence unmask any given sequence
-fn (f Frame) unmask_sequence(mut buffer []byte) {
+fn (f Frame) unmask_sequence(mut buffer []u8) {
 	for i in 0 .. buffer.len {
 		buffer[i] ^= f.masking_key[i % 4] & 0xff
 	}

@@ -9,8 +9,10 @@ import v.cflag
 import v.token
 import v.util
 
-[heap]
+[heap; minify]
 pub struct Table {
+mut:
+	parsing_type string // name of the type to enable recursive type parsing
 pub mut:
 	type_symbols       []&TypeSymbol
 	type_idxs          map[string]int
@@ -42,6 +44,7 @@ pub mut:
 	mdeprecated_msg   map[string]string    // module deprecation message
 	mdeprecated_after map[string]time.Time // module deprecation date
 	builtin_pub_fns   map[string]bool
+	pointer_size      int
 }
 
 // used by vls to avoid leaks
@@ -83,6 +86,7 @@ pub fn (t &Table) panic(message string) {
 	t.panic_handler(t, message)
 }
 
+[minify]
 pub struct Fn {
 pub:
 	is_variadic     bool
@@ -123,6 +127,7 @@ fn (f &Fn) method_equals(o &Fn) bool {
 		&& f.name == o.name
 }
 
+[minify]
 pub struct Param {
 pub:
 	pos         token.Pos
@@ -229,7 +234,7 @@ pub fn (t &Table) fn_type_signature(f &Fn) string {
 	return sig
 }
 
-// source_signature generates the signature of a function which looks like in the V source
+// fn_type_source_signature generates the signature of a function which looks like in the V source
 pub fn (t &Table) fn_type_source_signature(f &Fn) string {
 	mut sig := '('
 	for i, arg in f.params {
@@ -249,10 +254,14 @@ pub fn (t &Table) fn_type_source_signature(f &Fn) string {
 	sig += ')'
 	if f.return_type == ovoid_type {
 		sig += ' ?'
+	} else if f.return_type == rvoid_type {
+		sig += ' !'
 	} else if f.return_type != void_type {
 		return_type_sym := t.sym(f.return_type)
 		if f.return_type.has_flag(.optional) {
 			sig += ' ?$return_type_sym.name'
+		} else if f.return_type.has_flag(.result) {
+			sig += ' !$return_type_sym.name'
 		} else {
 			sig += ' $return_type_sym.name'
 		}
@@ -766,6 +775,7 @@ fn (mut t Table) rewrite_already_registered_symbol(typ TypeSymbol, existing_idx 
 		t.type_symbols[existing_idx] = &TypeSymbol{
 			...typ
 			methods: existing_symbol.methods
+			idx: existing_idx
 		}
 		return existing_idx
 	}
@@ -779,11 +789,13 @@ fn (mut t Table) rewrite_already_registered_symbol(typ TypeSymbol, existing_idx 
 				*existing_symbol = &TypeSymbol{
 					...typ
 					kind: existing_symbol.kind
+					idx: existing_idx
 				}
 			}
 		} else {
 			t.type_symbols[existing_idx] = &TypeSymbol{
 				...typ
+				idx: existing_idx
 			}
 		}
 		return existing_idx
@@ -830,7 +842,17 @@ pub fn (mut t Table) register_enum_decl(enum_decl EnumDecl) {
 }
 
 pub fn (t &Table) known_type(name string) bool {
-	return t.find_type_idx(name) != 0
+	return t.find_type_idx(name) != 0 || t.parsing_type == name
+}
+
+// start_parsing_type open the scope during the parsing of a type
+// where the type name must include the module prefix
+pub fn (mut t Table) start_parsing_type(type_name string) {
+	t.parsing_type = type_name
+}
+
+pub fn (mut t Table) reset_parsing_type() {
+	t.parsing_type = ''
 }
 
 pub fn (t &Table) known_type_idx(typ Type) bool {
@@ -1141,7 +1163,7 @@ pub fn (mut t Table) find_or_register_multi_return(mr_typs []Type) int {
 	mut name := '('
 	mut cname := 'multi_return'
 	for i, mr_typ in mr_typs {
-		mr_type_sym := t.sym(mr_typ)
+		mr_type_sym := t.sym(mktyp(mr_typ))
 		ref, cref := if mr_typ.is_ptr() { '&', 'ref_' } else { '', '' }
 		name += '$ref$mr_type_sym.name'
 		cname += '_$cref$mr_type_sym.cname'
@@ -1265,23 +1287,52 @@ pub fn (t &Table) sumtype_has_variant(parent Type, variant Type, is_as bool) boo
 	if parent_sym.kind == .sum_type {
 		parent_info := parent_sym.info as SumType
 		var_sym := t.sym(variant)
-		if var_sym.kind == .aggregate {
-			var_info := var_sym.info as Aggregate
-			for var_type in var_info.types {
-				if !t.sumtype_has_variant(parent, var_type, is_as) {
-					return false
-				}
+		match var_sym.kind {
+			.aggregate {
+				return t.sumtype_check_aggregate_variant(parent, variant, is_as)
 			}
-			return true
-		} else {
-			for v in parent_info.variants {
-				if v.idx() == variant.idx() && (!is_as || v.nr_muls() == variant.nr_muls()) {
-					return true
-				}
+			.alias {
+				return t.sumtype_check_alias_variant(parent, variant, is_as)
+			}
+			else {
+				return t.sumtype_check_variant_in_type(parent_info, variant, is_as)
 			}
 		}
 	}
 	return false
+}
+
+fn (t &Table) sumtype_check_variant_in_type(parent_info SumType, variant Type, is_as bool) bool {
+	for v in parent_info.variants {
+		if v.idx() == variant.idx() && (!is_as || v.nr_muls() == variant.nr_muls()) {
+			return true
+		}
+	}
+	return false
+}
+
+fn (t &Table) sumtype_check_aggregate_variant(parent_type Type, aggregate_type &Type, is_as bool) bool {
+	aggregate_sym := t.sym(aggregate_type).info as Aggregate
+	for var_type in aggregate_sym.types {
+		if !t.sumtype_has_variant(parent_type, var_type, is_as) {
+			return false
+		}
+	}
+	return true
+}
+
+fn (t &Table) sumtype_check_alias_variant(parent_type Type, alias_type Type, is_as bool) bool {
+	parent_sym := t.sym(parent_type).info as SumType
+	if !t.sumtype_check_variant_in_type(parent_sym, alias_type, is_as) {
+		alias_info := t.sym(alias_type).info as Alias
+		// The alias is an alias or of the same sumtype parent, or one
+		// of the SumType variant. e.g: alias of another sum type.
+		// https://github.com/vlang/v/issues/14029
+		return parent_type == alias_info.parent_type
+			|| t.sumtype_has_variant(parent_type, alias_info.parent_type, is_as)
+	}
+	// the alias_type is inside one of the variant of the sum type
+	return true
 }
 
 pub fn (t &Table) is_sumtype_or_in_variant(parent Type, typ Type) bool {
@@ -1361,9 +1412,9 @@ pub fn (mut t Table) complete_interface_check() {
 //
 // `123 > panic()`
 //
-// `128 > [16]byte`
+// `128 > [16]u8`
 //
-// `608 > [76]byte`
+// `608 > [76]u8`
 pub fn (mut t Table) bitsize_to_type(bit_size int) Type {
 	match bit_size {
 		8 {
@@ -2067,7 +2118,6 @@ pub fn (t &Table) is_comptime_type(x Type, y ComptimeType) bool {
 				.i16,
 				.int,
 				.i64,
-				.byte,
 				.u8,
 				.u16,
 				.u32,

@@ -189,6 +189,7 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 		is_fixed_array_var := unaliased_right_sym.kind == .array_fixed && val !is ast.ArrayInit
 			&& (val in [ast.Ident, ast.IndexExpr, ast.CallExpr, ast.SelectorExpr]
 			|| (val is ast.CastExpr && (val as ast.CastExpr).expr !is ast.ArrayInit))
+			&& !g.pref.translated
 		g.is_assign_lhs = true
 		g.assign_op = node.op
 		if val_type.has_flag(.optional) {
@@ -211,8 +212,9 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 				g.expr(val)
 				g.writeln(';}')
 			}
-		} else if node.op == .assign
+		} else if node.op == .assign && !g.pref.translated
 			&& (is_fixed_array_init || (right_sym.kind == .array_fixed && val is ast.Ident)) {
+			// Fixed arrays
 			mut v_var := ''
 			arr_typ := styp.trim('*')
 			if is_fixed_array_init {
@@ -236,11 +238,12 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 			} else {
 				g.out.go_back_to(pos)
 				is_var_mut := !is_decl && left.is_auto_deref_var()
-				addr := if is_var_mut { '' } else { '&' }
+				addr_left := if is_var_mut { '' } else { '&' }
 				g.writeln('')
-				g.write('memcpy($addr')
+				g.write('memcpy($addr_left')
 				g.expr(left)
-				g.writeln(', &$v_var, sizeof($arr_typ));')
+				addr_val := if is_fixed_array_var { '' } else { '&' }
+				g.writeln(', $addr_val$v_var, sizeof($arr_typ));')
 			}
 			g.is_assign_lhs = false
 		} else {
@@ -296,7 +299,7 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 					g.write(' = ${styp}_${util.replace_op(extracted_op)}(')
 					method := g.table.find_method(left_sym, extracted_op) or {
 						// the checker will most likely have found this, already...
-						g.error('assignemnt operator `$extracted_op=` used but no `$extracted_op` method defined',
+						g.error('assignment operator `$extracted_op=` used but no `$extracted_op` method defined',
 							node.pos)
 						ast.Fn{}
 					}
@@ -311,11 +314,32 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 				}
 				func := right_sym.info as ast.FnType
 				ret_styp := g.typ(func.func.return_type)
-				g.write('$ret_styp (*${g.get_ternary_name(ident.name)}) (')
+
+				mut call_conv := ''
+				mut msvc_call_conv := ''
+				for attr in func.func.attrs {
+					match attr.name {
+						'callconv' {
+							if g.is_cc_msvc {
+								msvc_call_conv = '__$attr.arg '
+							} else {
+								call_conv = '$attr.arg'
+							}
+						}
+						else {}
+					}
+				}
+				call_conv_attribute_suffix := if call_conv.len != 0 {
+					'__attribute__(($call_conv))'
+				} else {
+					''
+				}
+
+				g.write('$ret_styp ($msvc_call_conv*${g.get_ternary_name(ident.name)}) (')
 				def_pos := g.definitions.len
 				g.fn_decl_params(func.func.params, voidptr(0), false)
 				g.definitions.go_back(g.definitions.len - def_pos)
-				g.write(')')
+				g.write(')$call_conv_attribute_suffix')
 			} else {
 				if is_decl {
 					if is_inside_ternary {
@@ -377,7 +401,8 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 				g.write(', ')
 			}
 			mut cloned := false
-			if g.is_autofree && right_sym.kind in [.array, .string] {
+			if g.is_autofree && right_sym.kind in [.array, .string]
+				&& !unwrapped_val_type.has_flag(.shared_f) {
 				if g.gen_clone_assignment(val, unwrapped_val_type, false) {
 					cloned = true
 				}
@@ -403,6 +428,8 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 			g.is_shared = var_type.has_flag(.shared_f)
 			if !cloned {
 				if is_fixed_array_var {
+					// TODO Instead of the translated check, check if it's a pointer already
+					// and don't generate memcpy &
 					typ_str := g.typ(val_type).trim('*')
 					ref_str := if val_type.is_ptr() { '' } else { '&' }
 					g.write('memcpy(($typ_str*)')
@@ -413,7 +440,7 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 				} else if is_decl {
 					if is_fixed_array_init && !has_val {
 						if val is ast.ArrayInit {
-							g.array_init(val)
+							g.array_init(val, ident.name)
 						} else {
 							g.write('{0}')
 						}
@@ -424,7 +451,11 @@ fn (mut g Gen) gen_assign_stmt(node_ ast.AssignStmt) {
 						if val.is_auto_deref_var() {
 							g.write('*')
 						}
-						g.expr(val)
+						if val is ast.ArrayInit {
+							g.array_init(val, ident.name)
+						} else {
+							g.expr(val)
+						}
 						if is_auto_heap {
 							g.write('))')
 						}
@@ -467,7 +498,7 @@ fn (mut g Gen) gen_multi_return_assign(node &ast.AssignStmt, return_type ast.Typ
 	// TODO Handle in if_expr
 	is_opt := return_type.has_flag(.optional)
 	mr_var_name := 'mr_$node.pos.pos'
-	mr_styp := g.typ(return_type)
+	mr_styp := g.typ(return_type.clear_flag(.optional))
 	g.write('$mr_styp $mr_var_name = ')
 	g.expr(node.right[0])
 	g.writeln(';')
@@ -501,9 +532,9 @@ fn (mut g Gen) gen_multi_return_assign(node &ast.AssignStmt, return_type ast.Typ
 			if is_opt {
 				mr_base_styp := g.base_type(return_type)
 				if is_auto_heap {
-					g.writeln('HEAP${noscan}($mr_base_styp, *($mr_base_styp*)${mr_var_name}.data).arg$i) });')
+					g.writeln('HEAP${noscan}($mr_base_styp, ${mr_var_name}.arg$i) });')
 				} else {
-					g.writeln('(*($mr_base_styp*)${mr_var_name}.data).arg$i });')
+					g.writeln('${mr_var_name}.arg$i });')
 				}
 			} else {
 				if is_auto_heap {
@@ -516,9 +547,9 @@ fn (mut g Gen) gen_multi_return_assign(node &ast.AssignStmt, return_type ast.Typ
 			if is_opt {
 				mr_base_styp := g.base_type(return_type)
 				if is_auto_heap {
-					g.writeln(' = HEAP${noscan}($mr_base_styp, *($mr_base_styp*)${mr_var_name}.data).arg$i);')
+					g.writeln(' = HEAP${noscan}($mr_base_styp, ${mr_var_name}.arg$i);')
 				} else {
-					g.writeln(' = (*($mr_base_styp*)${mr_var_name}.data).arg$i;')
+					g.writeln(' = ${mr_var_name}.arg$i;')
 				}
 			} else {
 				if is_auto_heap {
@@ -584,10 +615,10 @@ fn (mut g Gen) gen_cross_var_assign(node &ast.AssignStmt) {
 				left_sym := g.table.sym(left_typ)
 				if left_sym.kind == .function {
 					g.write_fn_ptr_decl(left_sym.info as ast.FnType, '_var_$left.pos.pos')
-					g.writeln(' = $left.name;')
+					g.writeln(' = ${c_name(left.name)};')
 				} else {
 					styp := g.typ(left_typ)
-					g.writeln('$styp _var_$left.pos.pos = $left.name;')
+					g.writeln('$styp _var_$left.pos.pos = ${c_name(left.name)};')
 				}
 			}
 			ast.IndexExpr {

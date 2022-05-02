@@ -19,6 +19,8 @@ pub const hide_oks = os.getenv('VTEST_HIDE_OK') == '1'
 
 pub const fail_fast = os.getenv('VTEST_FAIL_FAST') == '1'
 
+pub const fail_flaky = os.getenv('VTEST_FAIL_FLAKY') == '1'
+
 pub const test_only = os.getenv('VTEST_ONLY').split_any(',')
 
 pub const test_only_fn = os.getenv('VTEST_ONLY_FN').split_any(',')
@@ -306,12 +308,14 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 	mut run_js := false
 
 	is_fmt := ts.vargs.contains('fmt')
+	is_vet := ts.vargs.contains('vet')
+	produces_file_output := !(is_fmt || is_vet)
 
 	if relative_file.ends_with('js.v') {
-		if !is_fmt {
+		if produces_file_output {
 			cmd_options << ' -b js'
+			run_js = true
 		}
-		run_js = true
 	}
 
 	if relative_file.contains('global') && !is_fmt {
@@ -333,13 +337,13 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 		fname.replace('.v', '')
 	}
 	generated_binary_fpath := os.join_path_single(tmpd, generated_binary_fname)
-	if os.exists(generated_binary_fpath) {
-		if ts.rm_binaries {
-			os.rm(generated_binary_fpath) or {}
+	if produces_file_output {
+		if os.exists(generated_binary_fpath) {
+			if ts.rm_binaries {
+				os.rm(generated_binary_fpath) or {}
+			}
 		}
-	}
 
-	if !ts.vargs.contains('fmt') {
 		cmd_options << ' -o ${os.quoted_path(generated_binary_fpath)}'
 	}
 	cmd := '${os.quoted_path(ts.vexe)} ' + cmd_options.join(' ') + ' ${os.quoted_path(file)}'
@@ -360,7 +364,7 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 			details := get_test_details(file)
 			os.setenv('VTEST_RETRY_MAX', '$details.retry', true)
 			for retry := 1; retry <= details.retry; retry++ {
-				ts.append_message(.info, '                 retrying $retry/$details.retry of $relative_file ...')
+				ts.append_message(.info, '  [stats]        retrying $retry/$details.retry of $relative_file ; known flaky: $details.flaky ...')
 				os.setenv('VTEST_RETRY', '$retry', true)
 				status = os.system(cmd)
 				if status == 0 {
@@ -369,6 +373,12 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 					}
 				}
 				time.sleep(500 * time.millisecond)
+			}
+			if details.flaky && !testing.fail_flaky {
+				ts.append_message(.info, '   *FAILURE* of the known flaky test file $relative_file is ignored, since VTEST_FAIL_FLAKY is 0 . Retry count: $details.retry .')
+				unsafe {
+					goto test_passed_system
+				}
 			}
 			ts.failed = true
 			ts.benchmark.fail()
@@ -397,13 +407,19 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 			details := get_test_details(file)
 			os.setenv('VTEST_RETRY_MAX', '$details.retry', true)
 			for retry := 1; retry <= details.retry; retry++ {
-				ts.append_message(.info, '                 retrying $retry/$details.retry of $relative_file ...')
+				ts.append_message(.info, '                 retrying $retry/$details.retry of $relative_file ; known flaky: $details.flaky ...')
 				os.setenv('VTEST_RETRY', '$retry', true)
 				r = os.execute(cmd)
 				if r.exit_code == 0 {
 					unsafe {
 						goto test_passed_execute
 					}
+				}
+			}
+			if details.flaky && !testing.fail_flaky {
+				ts.append_message(.info, '   *FAILURE* of the known flaky test file $relative_file is ignored, since VTEST_FAIL_FLAKY is 0 . Retry count: $details.retry .')
+				unsafe {
+					goto test_passed_execute
 				}
 			}
 			ts.failed = true
@@ -421,10 +437,8 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 			}
 		}
 	}
-	if os.exists(generated_binary_fpath) {
-		if ts.rm_binaries {
-			os.rm(generated_binary_fpath) or {}
-		}
+	if produces_file_output && os.exists(generated_binary_fpath) && ts.rm_binaries {
+		os.rm(generated_binary_fpath) or {}
 	}
 	return pool.no_result
 }
@@ -562,6 +576,7 @@ pub fn setup_new_vtmp_folder() string {
 pub struct TestDetails {
 pub mut:
 	retry int
+	flaky bool // when flaky tests fail, the whole run is still considered successfull, unless VTEST_FAIL_FLAKY is 1
 }
 
 pub fn get_test_details(file string) TestDetails {
@@ -570,6 +585,9 @@ pub fn get_test_details(file string) TestDetails {
 	for line in lines {
 		if line.starts_with('// vtest retry:') {
 			res.retry = line.all_after(':').trim_space().int()
+		}
+		if line.starts_with('// vtest flaky:') {
+			res.flaky = line.all_after(':').trim_space().bool()
 		}
 	}
 	return res

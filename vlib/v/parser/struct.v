@@ -51,6 +51,11 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 		p.error_with_pos('cannot register struct `IError`, it is builtin interface type',
 			name_pos)
 	}
+	// append module name before any type of parsing to enable recursion parsing
+	p.table.start_parsing_type(p.prepend_mod(name))
+	defer {
+		p.table.reset_parsing_type()
+	}
 	generic_types, _ := p.parse_generic_types()
 	no_body := p.tok.kind != .lcbr
 	if language == .v && no_body {
@@ -98,6 +103,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 	mut end_comments := []ast.Comment{}
 	if !no_body {
 		p.check(.lcbr)
+		mut i := 0
 		for p.tok.kind != .rcbr {
 			mut comments := []ast.Comment{}
 			for p.tok.kind == .comment {
@@ -179,7 +185,9 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				p.next()
 				is_field_volatile = true
 			}
-			is_embed := ((p.tok.lit.len > 1 && p.tok.lit[0].is_capital())
+			is_embed := ((p.tok.lit.len > 1 && p.tok.lit[0].is_capital()
+				&& (p.peek_tok.line_nr != p.tok.line_nr || p.peek_tok.kind !in [.name, .amp])
+				&& (p.peek_tok.kind != .lsbr || p.peek_token(2).kind != .rsbr))
 				|| p.peek_tok.kind == .dot) && language == .v && p.peek_tok.kind != .key_fn
 			is_on_top := ast_fields.len == 0 && !(is_field_mut || is_field_global)
 			mut field_name := ''
@@ -223,7 +231,9 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 						break
 					}
 				}
+				p.inside_struct_field_decl = true
 				typ = p.parse_type()
+				p.inside_struct_field_decl = false
 				if typ.idx() == 0 {
 					// error is set in parse_type
 					return ast.StructDecl{}
@@ -258,6 +268,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 					pos: field_pos
 					type_pos: type_pos
 					comments: comments
+					i: i
 					default_expr: default_expr
 					has_default_expr: has_default_expr
 					attrs: p.attrs
@@ -274,6 +285,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				pos: field_pos
 				type_pos: type_pos
 				comments: comments
+				i: i
 				default_expr: default_expr
 				has_default_expr: has_default_expr
 				attrs: p.attrs
@@ -283,12 +295,14 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				is_volatile: is_field_volatile
 			}
 			p.attrs = []
+			i++
 		}
 		p.top_level_statement_end()
 		last_line = p.tok.line_nr
 		p.check(.rcbr)
 	}
-	t := ast.TypeSymbol{
+	is_minify := attrs.contains('minify')
+	mut t := ast.TypeSymbol{
 		kind: .struct_
 		language: language
 		name: name
@@ -300,6 +314,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 			is_typedef: attrs.contains('typedef')
 			is_union: is_union
 			is_heap: attrs.contains('heap')
+			is_minify: is_minify
 			is_generic: generic_types.len > 0
 			generic_types: generic_types
 			attrs: attrs
@@ -507,7 +522,9 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 	mut mut_pos := -1
 	mut ifaces := []ast.InterfaceEmbedding{}
 	for p.tok.kind != .rcbr && p.tok.kind != .eof {
-		if p.tok.kind == .name && p.tok.lit.len > 0 && p.tok.lit[0].is_capital() {
+		if p.tok.kind == .name && p.tok.lit.len > 0 && p.tok.lit[0].is_capital()
+			&& (p.peek_tok.line_nr != p.tok.line_nr
+			|| p.peek_tok.kind !in [.name, .amp, .lsbr, .lpar]) {
 			iface_pos := p.tok.pos()
 			mut iface_name := p.tok.lit
 			iface_type := p.parse_type()
@@ -573,10 +590,6 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 			}
 			if ts.has_method(name) {
 				p.error_with_pos('duplicate method `$name`', method_start_pos)
-				return ast.InterfaceDecl{}
-			}
-			if language == .v && util.contains_capital(name) {
-				p.error('interface methods cannot contain uppercase letters, use snake_case instead')
 				return ast.InterfaceDecl{}
 			}
 			// field_names << name

@@ -413,6 +413,8 @@ fn (mut g JsGen) fn_decl_str(info ast.FnType) string {
 	fn_str += ')'
 	if info.func.return_type == ast.ovoid_type {
 		fn_str += ' ?'
+	} else if info.func.return_type == ast.rvoid_type {
+		fn_str += ' !'
 	} else if info.func.return_type != ast.void_type {
 		x := util.strip_main_name(g.table.get_type_name(g.unwrap_generic(info.func.return_type)))
 		if info.func.return_type.has_flag(.optional) {
@@ -466,7 +468,7 @@ fn (mut g JsGen) gen_str_for_array(info ast.Array, styp string, str_fn_name stri
 	is_elem_ptr := typ.is_ptr()
 	sym_has_str_method, str_method_expects_ptr, _ := sym.str_method_info()
 	mut elem_str_fn_name := g.get_str_fn(typ)
-	if sym.kind == .byte {
+	if sym.kind == .u8 {
 		elem_str_fn_name = elem_str_fn_name + '_escaped'
 	}
 

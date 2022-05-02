@@ -157,7 +157,7 @@ pub mut:
 	static_files      map[string]string
 	static_mime_types map[string]string
 	// Map containing query params for the route.
-	// Example: `http://localhost:3000/index?q=vpm&order_by=desc => { 'q': 'vpm', 'order_by': 'desc' }
+	// http://localhost:3000/index?q=vpm&order_by=desc => { 'q': 'vpm', 'order_by': 'desc' }
 	query map[string]string
 	// Multipart-form fields.
 	form map[string]string
@@ -389,11 +389,12 @@ pub struct RunParams {
 }
 
 // run_at - start a new VWeb server, listening only on a specific address `host`, at the specified `port`
-// Example: `vweb.run_at(app, 'localhost', 8099)`
+// Example: vweb.run_at(app, 'localhost', 8099)
 [manualfree]
 pub fn run_at<T>(global_app &T, params RunParams) ? {
 	mut l := net.listen_tcp(params.family, '$params.host:$params.port') or {
-		return error('failed to listen $err.code $err')
+		ecode := err.code()
+		return error('failed to listen $ecode $err')
 	}
 
 	// Parsing methods attributes
@@ -459,7 +460,12 @@ fn handle_conn<T>(mut conn net.TcpConn, mut app T, routes map[string]Route) {
 		}
 		return
 	}
-
+	$if trace_request ? {
+		dump(req)
+	}
+	$if trace_request_url ? {
+		dump(req.url)
+	}
 	// URL Parse
 	url := urllib.parse(req.url) or {
 		eprintln('error parsing path: $err')
@@ -628,8 +634,14 @@ fn (mut ctx Context) scan_static_directory(directory_path string, mount_path str
 	}
 }
 
-// Handles a directory static
+// handle_static is used to mark a folder (relative to the current working folder)
+// as one that contains only static resources (css files, images etc).
 // If `root` is set the mount path for the dir will be in '/'
+// Usage:
+// ```v
+// os.chdir( os.executable() ) ?
+// app.handle_static('assets', true)
+// ```
 pub fn (mut ctx Context) handle_static(directory_path string, root bool) bool {
 	if ctx.done || !os.exists(directory_path) {
 		return false
@@ -696,6 +708,9 @@ pub fn not_found() Result {
 }
 
 fn send_string(mut conn net.TcpConn, s string) ? {
+	$if trace_response ? {
+		eprintln('> send_string:\n$s\n')
+	}
 	conn.write(s.bytes()) ?
 }
 

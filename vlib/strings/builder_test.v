@@ -65,7 +65,7 @@ fn test_byte_write() {
 	temp_str := 'byte testing'
 	mut count := 0
 	for word in temp_str {
-		sb.write_byte(word)
+		sb.write_u8(word)
 		count++
 		assert count == sb.len
 	}
@@ -111,4 +111,19 @@ fn test_write_runes() {
 	sb.write_runes([`w`, `o`, `r`, `l`, `d`])
 	x := sb.str()
 	assert x == 'hello world'
+}
+
+fn test_ensure_cap() {
+	mut sb := strings.new_builder(0)
+	assert sb.cap == 0
+	sb.ensure_cap(10)
+	assert sb.cap == 10
+	sb.ensure_cap(10)
+	assert sb.cap == 10
+	sb.ensure_cap(15)
+	assert sb.cap == 15
+	sb.ensure_cap(10)
+	assert sb.cap == 15
+	sb.ensure_cap(-1)
+	assert sb.cap == 15
 }
