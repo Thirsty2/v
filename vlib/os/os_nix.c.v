@@ -17,6 +17,8 @@ pub const (
 	path_delimiter = ':'
 )
 
+const executable_suffixes = ['']
+
 const (
 	stdin_value  = 0
 	stdout_value = 1
@@ -294,7 +296,7 @@ pub fn is_dir(path string) bool {
 */
 
 // mkdir creates a new directory with the specified path.
-pub fn mkdir(path string) ?bool {
+pub fn mkdir(path string, params MkdirParams) ?bool {
 	if path == '.' {
 		return true
 	}
@@ -311,7 +313,7 @@ pub fn mkdir(path string) ?bool {
 	/*
 	$if linux {
 		$if !android {
-			ret := C.syscall(sys_mkdir, apath.str, 511)
+			ret := C.syscall(sys_mkdir, apath.str, params.mode)
 			if ret == -1 {
 				return error(posix_get_error_msg(C.errno))
 			}
@@ -319,7 +321,7 @@ pub fn mkdir(path string) ?bool {
 		}
 	}
 	*/
-	r := unsafe { C.mkdir(&char(apath.str), 511) }
+	r := unsafe { C.mkdir(&char(apath.str), params.mode) }
 	if r == -1 {
 		return error(posix_get_error_msg(C.errno))
 	}
@@ -365,6 +367,15 @@ pub fn execute(cmd string) Result {
 		exit_code: exit_code
 		output: soutput
 	}
+}
+
+// raw_execute does the same as `execute` on Unix platforms.
+// On Windows raw_execute starts the specified command, waits for it to complete, and returns its output.
+// It's marked as `unsafe` to help emphasize the problems that may arise by allowing, for example,
+// user provided escape sequences.
+[unsafe]
+pub fn raw_execute(cmd string) Result {
+	return execute(cmd)
 }
 
 [manualfree]
@@ -484,7 +495,7 @@ pub fn is_writable_folder(folder string) ?bool {
 		}
 		C.close(x)
 	}
-	rm(tmp_perm_check) ?
+	rm(tmp_perm_check)?
 	return true
 }
 

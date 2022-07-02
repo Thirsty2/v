@@ -23,6 +23,7 @@ const (
 		'int_literal', 'float_literal', 'bool', 'string', 'map', 'array', 'rune', 'any', 'voidptr']
 	shallow_equatables = [ast.Kind.i8, .i16, .int, .i64, .u8, .u16, .u32, .u64, .f32, .f64,
 		.int_literal, .float_literal, .bool, .string]
+	option_name        = '_option'
 )
 
 struct SourcemapHelper {
@@ -411,7 +412,7 @@ fn (g &JsGen) get_all_test_function_names() []string {
 }
 
 pub fn (mut g JsGen) enter_namespace(name string) {
-	if g.namespaces[name] == 0 {
+	if unsafe { g.namespaces[name] == 0 } {
 		// create a new namespace
 		ns := &Namespace{
 			name: name
@@ -520,7 +521,7 @@ pub fn (mut g JsGen) dec_indent() {
 
 [inline]
 pub fn (mut g JsGen) write(s string) {
-	if g.ns == 0 {
+	if unsafe { g.ns == 0 } {
 		verror('g.write: not in a namespace')
 	}
 	g.gen_indent()
@@ -529,7 +530,7 @@ pub fn (mut g JsGen) write(s string) {
 
 [inline]
 pub fn (mut g JsGen) writeln(s string) {
-	if g.ns == 0 {
+	if unsafe { g.ns == 0 } {
 		verror('g.writeln: not in a namespace')
 	}
 	g.gen_indent()
@@ -899,7 +900,7 @@ fn (mut g JsGen) expr(node_ ast.Expr) {
 			// TODO
 		}
 		ast.CharLiteral {
-			if utf8_str_len(node.val) < node.val.len {
+			if node.val.len_utf8() < node.val.len {
 				g.write("new rune('$node.val'.charCodeAt())")
 			} else {
 				g.write("new u8('$node.val')")
@@ -1870,7 +1871,7 @@ fn (mut g JsGen) gen_return_stmt(it ast.Return) {
 	if fn_return_is_optional {
 		optional_none := node.exprs[0] is ast.None
 		ftyp := g.typ(node.types[0])
-		mut is_regular_option := ftyp == 'Option'
+		mut is_regular_option := ftyp == js.option_name
 		if optional_none || is_regular_option || node.types[0] == ast.error_type_idx {
 			if !isnil(g.fn_decl) && g.fn_decl.is_test {
 				test_error_var := g.new_tmp_var()
@@ -1895,7 +1896,7 @@ fn (mut g JsGen) gen_return_stmt(it ast.Return) {
 		tmp := g.new_tmp_var()
 		g.write('const $tmp = new ')
 
-		g.writeln('Option({});')
+		g.writeln('${js.option_name}({});')
 		g.write('${tmp}.state = new u8(0);')
 		g.write('${tmp}.data = ')
 		if it.exprs.len == 1 {
@@ -2378,7 +2379,7 @@ fn (mut g JsGen) match_expr_classic(node ast.MatchExpr, is_expr bool, cond_var M
 				}
 			}
 			if is_expr && tmp_var.len == 0 {
-				g.write(') ? ')
+				g.write(')? ')
 			} else {
 				g.writeln(') {')
 			}
@@ -2448,7 +2449,8 @@ fn (mut g JsGen) match_expr(node ast.MatchExpr) {
 	typ := g.table.final_sym(node.cond_type)
 	if node.is_sum_type {
 		g.match_expr_sumtype(node, is_expr, cond_var, tmp_var)
-	} else if typ.kind == .enum_ && !g.inside_loop && node.branches.len > 5 && g.fn_decl != 0 { // do not optimize while in top-level
+	} else if typ.kind == .enum_ && !g.inside_loop && node.branches.len > 5
+		&& unsafe { g.fn_decl != 0 } { // do not optimize while in top-level
 		g.match_expr_switch(node, is_expr, cond_var, tmp_var, typ)
 	} else {
 		g.match_expr_classic(node, is_expr, cond_var, tmp_var)
@@ -2584,7 +2586,7 @@ fn (mut g JsGen) match_expr_sumtype(node ast.MatchExpr, is_expr bool, cond_var M
 					}
 				}
 				if is_expr && tmp_var.len == 0 {
-					g.write(') ? ')
+					g.write(')? ')
 				} else {
 					g.writeln(') {')
 				}
@@ -2756,7 +2758,7 @@ fn (mut g JsGen) gen_if_expr(node ast.IfExpr) {
 		return
 	}
 	// For simpe if expressions we can use C's `?:`
-	// `if x > 0 { 1 } else { 2 }` => `(x > 0) ? (1) : (2)`
+	// `if x > 0 { 1 } else { 2 }` => `(x > 0)? (1) : (2)`
 	// For if expressions with multiple statements or another if expression inside, it's much
 	// easier to use a temp var, than do C tricks with commas, introduce special vars etc
 	// (as it used to be done).
@@ -3690,7 +3692,7 @@ fn (mut g JsGen) unwrap_generic(typ ast.Type) ast.Type {
 		non-mut to make sure no one else can accidentally mutates the table.
 		*/
 		mut muttable := unsafe { &ast.Table(g.table) }
-		if t_typ := muttable.resolve_generic_to_concrete(typ, if g.fn_decl != 0 {
+		if t_typ := muttable.resolve_generic_to_concrete(typ, if unsafe { g.fn_decl != 0 } {
 			g.fn_decl.generic_names
 		} else {
 			[]string{}

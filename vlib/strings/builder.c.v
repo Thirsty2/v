@@ -48,14 +48,12 @@ pub fn (mut b Builder) write_runes(runes []rune) {
 	}
 }
 
-// write_b appends a single `data` byte to the accumulated buffer
-[deprecated: 'Use write_u8() instead']
-[deprecated_after: '2022-02-11']
-pub fn (mut b Builder) write_b(data u8) {
-	b << data
+// clear clears the buffer contents
+pub fn (mut b Builder) clear() {
+	b = []u8{cap: b.cap}
 }
 
-// write_byte appends a single `data` byte to the accumulated buffer
+// write_u8 appends a single `data` byte to the accumulated buffer
 pub fn (mut b Builder) write_u8(data u8) {
 	b << data
 }
@@ -174,12 +172,9 @@ pub fn (b &Builder) after(n int) string {
 }
 
 // str returns a copy of all of the accumulated buffer content.
-// Note: after a call to b.str(), the builder b should not be
-// used again, you need to call b.free() first, or just leave
-// it to be freed by -autofree when it goes out of scope.
-// The returned string *owns* its own separate copy of the
-// accumulated data that was in the string builder, before the
-// .str() call.
+// Note: after a call to b.str(), the builder b will be empty, and could be used again.
+// The returned string *owns* its own separate copy of the accumulated data that was in
+// the string builder, before the .str() call.
 pub fn (mut b Builder) str() string {
 	b << u8(0)
 	bcopy := unsafe { &u8(memdup_noscan(b.data, b.len)) }
@@ -210,7 +205,8 @@ pub fn (mut b Builder) ensure_cap(n int) {
 	}
 }
 
-// free is for manually freeing the contents of the buffer
+// free frees the memory block, used for the buffer.
+// Note: do not use the builder, after a call to free().
 [unsafe]
 pub fn (mut b Builder) free() {
 	if b.data != 0 {

@@ -44,7 +44,7 @@ fn test_result_void_err() {
 }
 
 fn propagate() ! {
-	result_void(false) !
+	result_void(false)!
 }
 
 fn test_propagation() {
@@ -56,7 +56,7 @@ fn function_that_can_return_error() !int {
 }
 
 fn util_error_propagation() ! {
-	function_that_can_return_error() !
+	function_that_can_return_error()!
 	assert false
 }
 
@@ -72,4 +72,25 @@ fn unsafe_return_error() !int {
 
 fn test_unsafe_return_error() {
 	unsafe_return_error() or { assert err.msg() == 'abc' }
+}
+
+fn return_reference_type(path string) !&string {
+	if path.len == 0 {
+		return error('vfopen called with ""')
+	}
+	str := ''
+	return &str
+}
+
+fn read() !string {
+	return ''
+}
+
+fn test_results_if_guard() {
+	if fcontent := read() {
+		assert fcontent == ''
+		assert '$fcontent' == ''
+		return
+	}
+	assert false
 }

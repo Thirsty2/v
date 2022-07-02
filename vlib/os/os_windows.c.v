@@ -14,6 +14,8 @@ fn C.CreateHardLinkW(&u16, &u16, C.SECURITY_ATTRIBUTES) int
 
 fn C._getpid() int
 
+const executable_suffixes = ['.exe', '.bat', '.cmd', '']
+
 pub const (
 	path_separator = '\\'
 	path_delimiter = ';'
@@ -201,7 +203,7 @@ pub fn is_dir(path string) bool {
 }
 */
 // mkdir creates a new directory with the specified path.
-pub fn mkdir(path string) ?bool {
+pub fn mkdir(path string, params MkdirParams) ?bool {
 	if path == '.' {
 		return true
 	}
@@ -293,6 +295,8 @@ pub fn get_error_msg(code int) string {
 }
 
 // execute starts the specified command, waits for it to complete, and returns its output.
+// In opposition to `raw_execute` this function will safeguard against content that is known to cause
+// a lot of problems when executing shell commands on Windows.
 pub fn execute(cmd string) Result {
 	if cmd.contains(';') || cmd.contains('&&') || cmd.contains('||') || cmd.contains('\n') {
 		return Result{
@@ -300,6 +304,14 @@ pub fn execute(cmd string) Result {
 			output: ';, &&, || and \\n are not allowed in shell commands'
 		}
 	}
+	return unsafe { raw_execute(cmd) }
+}
+
+// raw_execute starts the specified command, waits for it to complete, and returns its output.
+// It's marked as `unsafe` to help emphasize the problems that may arise by allowing, for example,
+// user provided escape sequences.
+[unsafe]
+pub fn raw_execute(cmd string) Result {
 	mut child_stdin := &u32(0)
 	mut child_stdout_read := &u32(0)
 	mut child_stdout_write := &u32(0)
@@ -506,7 +518,7 @@ pub fn is_writable_folder(folder string) ?bool {
 	tmp_folder_name := 'tmp_perm_check_pid_' + getpid().str()
 	tmp_perm_check := join_path_single(folder, tmp_folder_name)
 	write_file(tmp_perm_check, 'test') or { return error('cannot write to folder "$folder": $err') }
-	rm(tmp_perm_check) ?
+	rm(tmp_perm_check)?
 	return true
 }
 

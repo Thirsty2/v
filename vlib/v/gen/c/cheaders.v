@@ -69,153 +69,165 @@ fn c_closure_helpers(pref &pref.Preferences) string {
 
 	builder.write_string('
 #ifdef _MSC_VER
-	#define __RETURN_ADDRESS() _ReturnAddress()
+	#define __RETURN_ADDRESS() ((char*)_ReturnAddress())
 #elif defined(__TINYC__) && defined(_WIN32)
-	#define __RETURN_ADDRESS() __builtin_return_address(0)
+	#define __RETURN_ADDRESS() ((char*)__builtin_return_address(0))
 #else
-	#define __RETURN_ADDRESS() __builtin_extract_return_addr(__builtin_return_address(0))
+	#define __RETURN_ADDRESS() ((char*)__builtin_extract_return_addr(__builtin_return_address(0)))
 #endif
 
+static int _V_page_size = 0x4000; // 16K
+#define ASSUMED_PAGE_SIZE 0x4000
+#define _CLOSURE_SIZE (((2*sizeof(void*) > sizeof(__closure_thunk) ? 2*sizeof(void*) : sizeof(__closure_thunk)) + sizeof(void*) - 1) & ~(sizeof(void*) - 1))
+// equal to `max(2*sizeof(void*), sizeof(__closure_thunk))`, rounded up to the next multiple of `sizeof(void*)`
+
+// refer to https://godbolt.org/z/r7P3EYv6c for a complete assembly
 #ifdef __V_amd64
-#ifdef _WIN32
 static const char __closure_thunk[] = {
-	0x48, 0x89, 0x0d, 0xc1, 0xff, 0xff, 0xff,  // mov   qword ptr [rip - 63], rcx   # <_orig_rcx>
-	0x8f, 0x05, 0xc3, 0xff, 0xff, 0xff,        // pop   qword ptr [rip - 61]        # <_orig_rbp>
-	0xff, 0x15, 0xd5, 0xff, 0xff, 0xff,        // call  qword ptr [rip - 43]        # <wrapper>
-	0x48, 0x8b, 0x0d, 0xae, 0xff, 0xff, 0xff,  // mov   rcx, qword ptr [rip - 82]   # <_orig_rcx>
-	0xff, 0x15, 0xc0, 0xff, 0xff, 0xff,        // call  qword ptr [rip - 64]        # <unwrapper>
-	0xff, 0x35, 0xaa, 0xff, 0xff, 0xff,        // push  qword ptr [rip - 86]        # <_orig_rbp>
-	0xc3                                       // ret
+	0xF3, 0x44, 0x0F, 0x7E, 0x3D, 0xF7, 0xBF, 0xFF, 0xFF,  // movq  xmm15, QWORD PTR [rip - userdata]
+	0xFF, 0x25, 0xF9, 0xBF, 0xFF, 0xFF                     // jmp  QWORD PTR [rip - fn]
 };
-#else
-static const char __closure_thunk[] = {
-	0x48, 0x89, 0x3d, 0xc1, 0xff, 0xff, 0xff,  // mov   qword ptr [rip - 63], rdi   # <_orig_rdi>
-	0x8f, 0x05, 0xc3, 0xff, 0xff, 0xff,        // pop   qword ptr [rip - 61]        # <_orig_rbp>
-	0xff, 0x15, 0xd5, 0xff, 0xff, 0xff,        // call  qword ptr [rip - 43]        # <wrapper>
-	0x48, 0x8b, 0x3d, 0xae, 0xff, 0xff, 0xff,  // mov   rdi, qword ptr [rip - 82]   # <_orig_rdi>
-	0xff, 0x15, 0xc0, 0xff, 0xff, 0xff,        // call  qword ptr [rip - 64]        # <unwrapper>
-	0xff, 0x35, 0xaa, 0xff, 0xff, 0xff,        // push  qword ptr [rip - 86]        # <_orig_rbp>
-	0xc3                                       // ret
+static char __CLOSURE_GET_DATA_BYTES[] = {
+	0x66, 0x4C, 0x0F, 0x7E, 0xF8,  // movq rax, xmm15
+	0xC3                           // ret
 };
-#endif
-#define __CLOSURE_WRAPPER_OFFSET 19
-#define __CLOSURE_UNWRAPPER_OFFSET 32
-#define __CLOSURE_WRAPPER_EXTRA_PARAM   void* _t
-#define __CLOSURE_WRAPPER_EXTRA_PARAM_COMMA ,
+#define __CLOSURE_DATA_OFFSET 0x400C
 #elif defined(__V_x86)
 static char __closure_thunk[] = {
-    0xe8, 0x00, 0x00, 0x00, 0x00,  // call 4
-    0x58,                          // pop  eax
-    0x8f, 0x40, 0xe3,              // pop  dword ptr [eax - 29] # <_orig_rbp>
-    0xff, 0x50, 0xef,              // call dword ptr [eax - 17] # <wrapper>
-    0xe8, 0x00, 0x00, 0x00, 0x00,  // call 4
-    0x58,                          // pop  eax
-    0xff, 0x50, 0xdf,              // call dword ptr [eax - 33] # <unwrapper>
-    0xe8, 0x00, 0x00, 0x00, 0x00,  // call 4
-    0x58,                          // pop  eax
-    0xff, 0x70, 0xce,              // push dword ptr [eax - 50] # <_orig_rbp>
-    0xc3                           // ret
+	0xe8, 0x00, 0x00, 0x00, 0x00,        // call here
+	                                     // here:
+	0x59,                                // pop  ecx
+	0x66, 0x0F, 0x6E, 0xF9,              // movd xmm7, ecx
+	0xff, 0xA1, 0xff, 0xbf, 0xff, 0xff,  // jmp  DWORD PTR [ecx - 0x4001] # <fn>
 };
 
-#define __CLOSURE_WRAPPER_OFFSET 12
-#define __CLOSURE_UNWRAPPER_OFFSET 21
-#define __CLOSURE_WRAPPER_EXTRA_PARAM   void* _t
-#define __CLOSURE_WRAPPER_EXTRA_PARAM_COMMA ,
+static char __CLOSURE_GET_DATA_BYTES[] = {
+	0x66, 0x0F, 0x7E, 0xF8,              // movd eax, xmm7
+	0x8B, 0x80, 0xFB, 0xBF, 0xFF, 0xFF,  // mov eax, DWORD PTR [eax - 0x4005]
+	0xc3                                 // ret
+};
 
+#define __CLOSURE_DATA_OFFSET 0x4012
 #elif defined(__V_arm64)
 static char __closure_thunk[] = {
-	0x10, 0x00, 0x00, 0x10,  // adr x16, start
-	0x08, 0x82, 0x1c, 0xf8,  // str x8, _orig_x8
-	0x1e, 0x02, 0x1d, 0xf8,  // str x30, _orig_x30
-	0xf0, 0xfe, 0xff, 0x58,  // ldr x16, wrapper
-	0x00, 0x02, 0x3f, 0xd6,  // blr x16
-	0x70, 0xff, 0xff, 0x10,  // adr x16, start
-	0x08, 0x82, 0x5c, 0xf8,  // ldr x8, _orig_x8
-	0x30, 0xfe, 0xff, 0x58,  // ldr x16, unwrapper
-	0x00, 0x02, 0x3f, 0xd6,  // blr x16
-	0xf0, 0xfe, 0xff, 0x10,  // adr x16, start
-	0x1e, 0x02, 0x5d, 0xf8,  // ldr x30, _orig_x30
-	0xc0, 0x03, 0x5f, 0xd6   // ret
+	0x11, 0x00, 0xFE, 0x58,  // ldr x17, userdata
+	0x30, 0x00, 0xFE, 0x58,  // ldr x16, fn
+	0x00, 0x02, 0x1F, 0xD6   // br  x16
 };
-#define __CLOSURE_WRAPPER_OFFSET 20
-#define __CLOSURE_UNWRAPPER_OFFSET 36
-#define __CLOSURE_WRAPPER_EXTRA_PARAM
-#define __CLOSURE_WRAPPER_EXTRA_PARAM_COMMA
+static char __CLOSURE_GET_DATA_BYTES[] = {
+	0xE0, 0x03, 0x11, 0xAA,  // mov x0, x17
+	0xC0, 0x03, 0x5F, 0xD6   // ret
+};
 #elif defined(__V_arm32)
 static char __closure_thunk[] = {
-    0x24, 0x00, 0x0f, 0xe5,  //  str r0, orig_r0
-    0x24, 0xe0, 0x0f, 0xe5,  //  str lr, orig_lr
-    0x1c, 0xc0, 0x1f, 0xe5,  //  ldr ip, wrapper
-    0x3c, 0xff, 0x2f, 0xe1,  //  blx ip
-    0x34, 0x00, 0x1f, 0xe5,  //  ldr r0, orig_r0
-    0x2c, 0xc0, 0x1f, 0xe5,  //  ldr ip, unwrapper
-    0x3c, 0xff, 0x2f, 0xe1,  //  blx ip
-    0x3c, 0xe0, 0x1f, 0xe5,  //  ldr lr, orig_lr
-    0x1e, 0xff, 0x2f, 0xe1   //  bx  lr
+	0x04, 0xC0, 0x4F, 0xE2,  // adr ip, here
+                             // here:
+	0x01, 0xC9, 0x4C, 0xE2,  // sub  ip, ip, #4000
+	0x90, 0xCA, 0x07, 0xEE,  // vmov s15, ip
+	0x00, 0xC0, 0x9C, 0xE5,  // ldr  ip, [ip, 0]
+	0x1C, 0xFF, 0x2F, 0xE1   // bx   ip
 };
-#define __CLOSURE_WRAPPER_OFFSET 16
-#define __CLOSURE_UNWRAPPER_OFFSET 28
-#define __CLOSURE_WRAPPER_EXTRA_PARAM   void* _t
-#define __CLOSURE_WRAPPER_EXTRA_PARAM_COMMA ,
+static char __CLOSURE_GET_DATA_BYTES[] = {
+	0x90, 0x0A, 0x17, 0xEE,
+	0x04, 0x00, 0x10, 0xE5,
+	0x1E, 0xFF, 0x2F, 0xE1
+};
+#define __CLOSURE_DATA_OFFSET 0xFFC
 #endif
 
-static int _V_PAGE_SIZE = 4096; // pre-initialized to the most common value, in case _vinit is not called (in a DLL, for example)
+static void*(*__CLOSURE_GET_DATA)(void) = 0;
 
-static inline void __closure_set_data(void* closure, void* data) {
-    void** p = closure;
-    p[-1] = data;
+static inline void __closure_set_data(char* closure, void* data) {
+	void** p = (void**)(closure - ASSUMED_PAGE_SIZE);
+	p[0] = data;
 }
 
-static inline void __closure_set_function(void* closure, void* f) {
-    void** p = closure;
-    p[-2] = f;
+static inline void __closure_set_function(char* closure, void* f) {
+	void** p = (void**)(closure - ASSUMED_PAGE_SIZE);
+	p[1] = f;
 }
 
-static inline void __closure_set_wrapper(void* closure, void* f) {
-    void** p = closure;
-    p[-3] = f;
-}
-
-static inline void __closure_set_unwrapper(void* closure, void* f) {
-    void** p = closure;
-    p[-4] = f;
-}
-
-static inline void __closure_set_base_ptr(void* closure, void* bp) {
-    void** p = closure;
-    p[-5] = bp;
-}
-
-static void* __closure_create(void* fn, void* wrapper, void* unwrapper, void* data) {
 #ifdef _WIN32
-	SYSTEM_INFO si;
-	GetNativeSystemInfo(&si);
-	uint32_t page_size = si.dwPageSize;
-	char* p = VirtualAlloc(NULL, page_size * 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-	if (p == NULL) return 0;
+#include <synchapi.h>
+static SRWLOCK _closure_mtx;
+#define _closure_mtx_init() InitializeSRWLock(&_closure_mtx)
+#define _closure_mtx_lock() AcquireSRWLockExclusive(&_closure_mtx)
+#define _closure_mtx_unlock() ReleaseSRWLockExclusive(&_closure_mtx)
 #else
-	uint32_t page_size = sysconf(_SC_PAGESIZE);
-	int prot = PROT_READ | PROT_WRITE;
-	int flags = MAP_ANONYMOUS | MAP_PRIVATE;
-	char* p = mmap(0, page_size * 2, prot, flags, -1, 0);
-	if (p == MAP_FAILED) return 0;
+static pthread_mutex_t _closure_mtx;
+#define _closure_mtx_init() pthread_mutex_init(&_closure_mtx, 0)
+#define _closure_mtx_lock() pthread_mutex_lock(&_closure_mtx)
+#define _closure_mtx_unlock() pthread_mutex_unlock(&_closure_mtx)
 #endif
+static char* _closure_ptr = 0;
+static int _closure_cap = 0;
 
-	void* closure = p + page_size;
-	memcpy(closure, __closure_thunk, sizeof(__closure_thunk));
-
+static void __closure_alloc(void) {
+#ifdef _WIN32
+	char* p = VirtualAlloc(NULL, _V_page_size * 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (p == NULL) return;
+#else
+	char* p = mmap(0, _V_page_size * 2, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	if (p == MAP_FAILED) return;
+#endif
+	char* x = p + _V_page_size;
+	int remaining = _V_page_size / _CLOSURE_SIZE;
+	_closure_ptr = x;
+	_closure_cap = remaining;
+	while (remaining > 0) {
+		memcpy(x, __closure_thunk, sizeof(__closure_thunk));
+		remaining--;
+		x += _CLOSURE_SIZE;
+	}
 #ifdef _WIN32
 	DWORD _tmp;
-	VirtualProtect(closure, page_size, PAGE_EXECUTE_READ, &_tmp);
+	VirtualProtect(_closure_ptr, _V_page_size, PAGE_EXECUTE_READ, &_tmp);
 #else
-	mprotect(closure, page_size, PROT_READ | PROT_EXEC);
+	mprotect(_closure_ptr, _V_page_size, PROT_READ | PROT_EXEC);
+#endif
+}
+
+#ifdef _WIN32
+void __closure_init() {
+	SYSTEM_INFO si;
+	GetNativeSystemInfo(&si);
+	uint32_t page_size = si.dwPageSize * (((ASSUMED_PAGE_SIZE - 1) / si.dwPageSize) + 1);
+	_V_page_size = page_size;
+	__closure_alloc();
+	DWORD _tmp;
+	VirtualProtect(_closure_ptr, page_size, PAGE_READWRITE, &_tmp);
+	memcpy(_closure_ptr, __CLOSURE_GET_DATA_BYTES, sizeof(__CLOSURE_GET_DATA_BYTES));
+	VirtualProtect(_closure_ptr, page_size, PAGE_EXECUTE_READ, &_tmp);
+	__CLOSURE_GET_DATA = (void*)_closure_ptr;
+	_closure_ptr += _CLOSURE_SIZE;
+	_closure_cap--;
+}
+#else
+void __closure_init() {
+	uint32_t page_size = sysconf(_SC_PAGESIZE);
+	page_size = page_size * (((ASSUMED_PAGE_SIZE - 1) / page_size) + 1);
+	_V_page_size = page_size;
+	__closure_alloc();
+	mprotect(_closure_ptr, page_size, PROT_READ | PROT_WRITE);
+	memcpy(_closure_ptr, __CLOSURE_GET_DATA_BYTES, sizeof(__CLOSURE_GET_DATA_BYTES));
+	mprotect(_closure_ptr, page_size, PROT_READ | PROT_EXEC);
+	__CLOSURE_GET_DATA = (void*)_closure_ptr;
+	_closure_ptr += _CLOSURE_SIZE;
+	_closure_cap--;
+}
 #endif
 
+static void* __closure_create(void* fn, void* data) {
+	_closure_mtx_lock();
+	if (_closure_cap == 0) {
+		__closure_alloc();
+	}
+	_closure_cap--;
+	void* closure = _closure_ptr;
+	_closure_ptr += _CLOSURE_SIZE;
 	__closure_set_data(closure, data);
 	__closure_set_function(closure, fn);
-	__closure_set_wrapper(closure, wrapper);
-	__closure_set_unwrapper(closure, unwrapper);
-	__closure_set_base_ptr(closure, p);
+	_closure_mtx_unlock();
 	return closure;
 }
 ')
@@ -366,6 +378,10 @@ const c_common_macros = '
 		#undef VWEAK
 		#define VWEAK
 	#endif
+	#if defined(__MINGW32__) || defined(__MINGW64__)
+		#undef VWEAK
+		#define VWEAK
+	#endif
 #endif
 
 #if !defined(VNORETURN)
@@ -460,11 +476,6 @@ typedef int (*qsort_callback_func)(const void*, const void*);
 	#if defined __has_include
 		#if __has_include (<execinfo.h>)
 			#include <execinfo.h>
-		#else
-			// Most probably musl OR __ANDROID__ ...
-			int backtrace (void **__array, int __size) { return 0; }
-			char **backtrace_symbols (void *const *__array, int __size){ return 0; }
-			void backtrace_symbols_fd (void *const *__array, int __size, int __fd){}
 		#endif
 	#endif
 #endif
@@ -543,7 +554,9 @@ voidptr memdup(voidptr src, int sz);
 
 	#include <io.h> // _waccess
 	#include <direct.h> // _wgetcwd
+	#ifdef V_USE_SIGNAL_H
 	#include <signal.h> // signal and SIGSEGV for segmentation fault handler
+	#endif
 
 	#ifdef _MSC_VER
 		// On MSVC these are the same (as long as /volatile:ms is passed)

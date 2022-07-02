@@ -9,6 +9,9 @@ import v.token
 
 pub fn (mut p Parser) expr(precedence int) ast.Expr {
 	return p.check_expr(precedence) or {
+		if token.is_decl(p.tok.kind) && p.disallow_declarations_in_script_mode() {
+			return ast.empty_expr()
+		}
 		p.error_with_pos('invalid expression: unexpected $p.tok', p.tok.pos())
 	}
 }
@@ -52,7 +55,7 @@ pub fn (mut p Parser) check_expr(precedence int) ?ast.Expr {
 				p.error_with_pos("deprecated map syntax, use syntax like `{'age': 20}`",
 					p.tok.pos())
 			} else {
-				if p.inside_if && p.is_generic_name() && p.peek_tok.kind != .dot {
+				if p.inside_comptime_if && p.is_generic_name() && p.peek_tok.kind != .dot {
 					// $if T is string {}
 					p.expecting_type = true
 				}
@@ -199,12 +202,17 @@ pub fn (mut p Parser) check_expr(precedence int) ?ast.Expr {
 			p.next() // sizeof
 			p.check(.lpar)
 			pos := p.tok.pos()
-			is_known_var := p.mark_var_as_used(p.tok.lit)
+			mut is_known_var := p.mark_var_as_used(p.tok.lit)
 				|| p.table.global_scope.known_const(p.mod + '.' + p.tok.lit)
 			//|| p.table.known_fn(p.mod + '.' + p.tok.lit)
 			// assume `mod.` prefix leads to a type
-			is_type := p.known_import(p.tok.lit) || p.tok.kind.is_start_of_type()
+			mut is_type := p.known_import(p.tok.lit) || p.tok.kind.is_start_of_type()
 				|| (p.tok.lit.len > 0 && p.tok.lit[0].is_capital())
+
+			if p.tok.lit in ['c', 'r'] && p.peek_tok.kind == .string {
+				is_known_var = false
+				is_type = false
+			}
 			if is_known_var || !is_type {
 				expr := p.expr(0)
 				if is_reftype {
@@ -264,6 +272,9 @@ pub fn (mut p Parser) check_expr(precedence int) ?ast.Expr {
 			p.next()
 			p.check(.lpar)
 			expr := p.expr(0)
+			if p.tok.kind == .comma && p.peek_tok.kind == .rpar {
+				p.next()
+			}
 			p.check(.rpar)
 			node = ast.DumpExpr{
 				expr: expr
@@ -432,16 +443,8 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 				pos: pos
 				is_stmt: true
 			}
-		} else if p.tok.kind.is_infix() {
-			if p.tok.kind.is_prefix() && p.tok.line_nr != p.prev_tok.line_nr {
-				// return early for deref assign `*x = 2` goes to prefix expr
-				if p.tok.kind == .mul && p.peek_token(2).kind == .assign {
-					return node
-				}
-				// added 10/2020: LATER this will be parsed as PrefixExpr instead
-				p.warn_with_pos('move infix `$p.tok.kind` operator before new line (if infix intended) or use brackets for a prefix expression',
-					p.tok.pos())
-			}
+		} else if p.tok.kind.is_infix() && !(p.tok.kind in [.minus, .amp, .mul]
+			&& p.tok.line_nr != p.prev_tok.line_nr) {
 			// continue on infix expr
 			node = p.infix_expr(node)
 			// return early `if bar is SumType as b {`
@@ -454,7 +457,7 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 			if p.peek_tok.kind in [.rpar, .rsbr] {
 				if !p.inside_ct_if_expr {
 					p.warn_with_pos('`$p.tok.kind` operator can only be used as a statement',
-						p.peek_tok.pos())
+						p.tok.pos())
 				}
 			}
 			if p.tok.kind in [.inc, .dec] && p.prev_tok.line_nr != p.tok.line_nr {
@@ -464,10 +467,15 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 			if mut node is ast.IndexExpr {
 				node.recursive_mapset_is_setter(true)
 			}
+			is_c2v_prefix := p.peek_tok.kind == .dollar
 			node = ast.PostfixExpr{
 				op: p.tok.kind
 				expr: node
 				pos: p.tok.pos()
+				is_c2v_prefix: is_c2v_prefix
+			}
+			if is_c2v_prefix {
+				p.next()
 			}
 			p.next()
 			// return node // TODO bring back, only allow ++/-- in exprs in translated code

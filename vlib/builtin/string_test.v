@@ -145,15 +145,15 @@ fn test_ranges() {
 }
 
 fn ranges_propagate_first(s string) ?string {
-	return s[10..] ?
+	return s[10..]?
 }
 
 fn ranges_propagate_last(s string) ?string {
-	return s[..20] ?
+	return s[..20]?
 }
 
 fn ranges_propagate_both(s string) ?string {
-	return s[1..20] ?
+	return s[1..20]?
 }
 
 fn test_split_nth() {
@@ -445,6 +445,13 @@ fn test_contains_any() {
 	assert 'failure'.contains_any('ui')
 	assert !'foo'.contains_any('')
 	assert !''.contains_any('')
+}
+
+fn test_contains_only() {
+	assert '23885'.contains_only('0123456789')
+	assert '23gg885'.contains_only('01g23456789')
+	assert !'hello;'.contains_only('hello')
+	assert !''.contains_only('')
 }
 
 fn test_contains_any_substr() {
@@ -987,6 +994,16 @@ fn test_string_f32() {
 	assert '123'.f32() - 123 < f32_epsilon
 	assert '-123'.f32() - (-123) < f32_epsilon
 	assert '-123.456'.f32() - (-123.456) <= f32_epsilon
+}
+
+fn test_string_is_ascii() {
+	assert ''.is_ascii() == true
+	assert ' '.is_ascii() == true
+	assert '~~'.is_ascii() == true
+	assert ' Az~'.is_ascii() == true
+	assert ' Aö~'.is_ascii() == false
+	assert '👋'.is_ascii() == false
+	assert 'a👋bc'.is_ascii() == false
 }
 
 fn test_string_with_zero_byte_escape() {

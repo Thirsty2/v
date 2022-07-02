@@ -107,7 +107,7 @@ For more details and troubleshooting, please visit the [vab GitHub repository](h
 </td><td width=33% valign=top>
 
 * [Functions 2](#functions-2)
-    * [Pure functions by default](#pure-functions-by-default)
+    * [Immutable function args by default](#immutable-function-args-by-default)
     * [Mutable arguments](#mutable-arguments)
     * [Variable number of arguments](#variable-number-of-arguments)
     * [Anonymous & higher-order functions](#anonymous--higher-order-functions)
@@ -343,8 +343,7 @@ the expression `T(v)` converts the value `v` to the
 type `T`.
 
 Unlike most other languages, V only allows defining variables in functions.
-Global (module level) variables are not allowed. There's no global state in V
-(see [Pure functions by default](#pure-functions-by-default) for details).
+Global (module level) variables are not allowed. There's no global state in V.
 
 For consistency across different code bases, all variable and function names
 must use the `snake_case` style, as opposed to type names, which must use `PascalCase`.
@@ -616,7 +615,7 @@ Also note: in most cases, it's best to leave the format type empty. Floats will 
 default as `g`, integers will be rendered by default as `d`, and `s` is almost always redundant.
 There are only three cases where specifying a type is recommended:
 
-- format strings are parsed at compile time, so specifing a type can help detect errors then
+- format strings are parsed at compile time, so specifying a type can help detect errors then
 - format strings default to using lowercase letters for hex digits and the `e` in exponents. Use a
   uppercase type to force the use of uppercase hex digits and an uppercase `E` in exponents.
 - format strings are the most convenient way to get hex, binary or octal strings from an integer.
@@ -1295,6 +1294,16 @@ mm := map[string]int{}
 val := mm['bad_key'] or { panic('key not found') }
 ```
 
+You can also check, if a key is present, and get its value, if it was present, in one go:
+```v
+m := {
+	'abc': 'def'
+}
+if v := m['abc'] {
+	println('the map value for that key is: $v')
+}
+```
+
 The same optional check applies to arrays:
 
 ```v
@@ -1303,7 +1312,7 @@ large_index := 999
 val := arr[large_index] or { panic('out of bounds') }
 println(val)
 // you can also do this, if you want to *propagate* the access error:
-val2 := arr[333] ?
+val2 := arr[333]?
 println(val2)
 ```
 
@@ -1893,7 +1902,7 @@ enum State {
 
 // write log file and return number of bytes written
 fn write_log(s State) ?int {
-	mut f := os.create('log.txt') ?
+	mut f := os.create('log.txt')?
 	defer {
 		f.close()
 	}
@@ -2269,22 +2278,24 @@ Note that the embedded struct arguments are not necessarily stored in the order 
 
 ## Functions 2
 
-### Pure functions by default
+### Immutable function args by default
 
-V functions are pure by default, meaning that their return values are a function of their
-arguments only, and their evaluation has no side effects (besides I/O).
+In V function arguments are immutable by default, and mutable args have to be
+marked on call.
 
-This is achieved by a lack of global variables and all function arguments being
-immutable by default, even when [references](#references) are passed.
+Since there are also no globals, that means that the return values of the functions,
+are a function of their arguments only, and their evaluation has no side effects
+(unless the function uses I/O).
 
-V is not a purely functional language however.
+Function arguments are immutable by default, even when [references](#references) are passed.
+
+Note that V is not a purely functional language however.
 
 There is a compiler flag to enable global variables (`-enable-globals`), but this is
 intended for low-level applications like kernels and drivers.
 
 ### Mutable arguments
-
-It is possible to modify function arguments by using the keyword `mut`:
+It is possible to modify function arguments by declaring them with the keyword `mut`:
 
 ```v
 struct User {
@@ -2303,7 +2314,7 @@ user.register()
 println(user.is_registered) // "true"
 ```
 
-In this example, the receiver (which is simply the first argument) is marked as mutable,
+In this example, the receiver (which is just the first argument) is explicitly marked as mutable,
 so `register()` can change the user object. The same works with non-receiver arguments:
 
 ```v
@@ -2421,9 +2432,6 @@ fn main() {
 V supports closures too.
 This means that anonymous functions can inherit variables from the scope they were created in.
 They must do so explicitly by listing all variables that are inherited.
-
-> Warning: currently works on Unix-based, x64 architectures only.
-Some work is in progress to make closures work on Windows, then other architectures.
 
 ```v oksyntax
 my_int := 1
@@ -3422,7 +3430,7 @@ propagate the error:
 import net.http
 
 fn f(url string) ?string {
-	resp := http.get(url) ?
+	resp := http.get(url)?
 	return resp.text
 }
 ```
@@ -3594,8 +3602,8 @@ println(compare(1.1, 1.2)) //         -1
 
 ## Concurrency
 ### Spawning Concurrent Tasks
-V's model of concurrency is very similar to Go's. To run `foo()` concurrently in
-a different thread, just call it with `go foo()`:
+V's model of concurrency is going to be very similar to Go's.
+For now, `go foo()` runs `foo()` concurrently in a different thread:
 
 ```v
 import math
@@ -3610,6 +3618,9 @@ fn main() {
 	// p will be run in parallel thread
 }
 ```
+
+> In V 0.4 `go foo()` will be automatically renamed via vfmt to `spawn foo()`,
+and there will be a way to launch a coroutine (a lightweight thread managed by the runtime).
 
 Sometimes it is necessary to wait until a parallel thread has finished. This can
 be done by assigning a *handle* to the started thread and calling the `wait()` method
@@ -3940,7 +3951,7 @@ println(user.last_name)
 println(user.age)
 // You can also decode JSON arrays:
 sfoos := '[{"x":123},{"x":456}]'
-foos := json.decode([]Foo, sfoos) ?
+foos := json.decode([]Foo, sfoos)?
 println(foos[0].x)
 println(foos[1].x)
 ```
@@ -4045,8 +4056,8 @@ If a test function has an error return type, any propagated errors will fail the
 import strconv
 
 fn test_atoi() ? {
-	assert strconv.atoi('1') ? == 1
-	assert strconv.atoi('one') ? == 1 // test will fail
+	assert strconv.atoi('1')? == 1
+	assert strconv.atoi('one')? == 1 // test will fail
 }
 ```
 
@@ -4107,17 +4118,16 @@ fn (data &MyType) free() {
 Just as the compiler frees C data types with C's `free()`, it will statically insert
 `free()` calls for your data type at the end of each variable's lifetime.
 
+Autofree can be enabled with an `-autofree` flag.
+
 For developers willing to have more low level control, autofree can be disabled with
 `-manualfree`, or by adding a `[manualfree]` on each function that wants manage its
 memory manually. (See [attributes](#attributes)).
 
-_Note: right now autofree is hidden behind the -autofree flag. It will be enabled by
-default in V 0.3. If autofree is not used, V programs will leak memory._
 
 Note 2: Autofree is still WIP. Until it stabilises and becomes the default, please
-compile your long running processes with `-gc boehm`, which will use the
-Boehm-Demers-Weiser conservative garbage collector, to free the memory, that your
-programs leak, at runtime.
+avoid using it. Right now allocations are handled by a minimal and well performing GC
+until V's autofree engine is production ready.
 
 ### Examples
 
@@ -4438,7 +4448,7 @@ struct Customer {
 	country   string [nonull]
 }
 
-db := sqlite.connect('customers.db') ?
+db := sqlite.connect('customers.db')?
 
 // you can create tables:
 // CREATE TABLE IF NOT EXISTS `Customer` (
@@ -5359,7 +5369,7 @@ Full list of builtin options:
 import os
 fn main() {
 	embedded_file := $embed_file('v.png')
-	os.write_file('exported.png', embedded_file.to_string()) ?
+	os.write_file('exported.png', embedded_file.to_string())?
 }
 ```
 
@@ -5383,7 +5393,7 @@ Currently only one compression type is supported: `zlib`
 import os
 fn main() {
 	embedded_file := $embed_file('v.png', .zlib) // compressed using zlib
-	os.write_file('exported.png', embedded_file.to_string()) ?
+	os.write_file('exported.png', embedded_file.to_string())?
 }
 ```
 
@@ -5434,9 +5444,6 @@ numbers: [1, 2, 3]
 3
 ```
 
-
-
-
 #### `$env`
 
 ```v
@@ -5451,6 +5458,34 @@ fn main() {
 V can bring in values at compile time from environment variables.
 `$env('ENV_VAR')` can also be used in top-level `#flag` and `#include` statements:
 `#flag linux -I $env('JAVA_HOME')/include`.
+
+#### `$compile_error` and `$compile_warn`
+
+These two comptime functions are very useful for displaying custom errors/warnings during
+compile time.
+
+Both receive as their only argument a string literal that contains the message to display:
+
+```v failcompile nofmt
+// x.v
+module main
+
+$if linux {
+    $compile_error('Linux is not supported')
+}
+
+fn main() {
+}
+
+$ v run x.v
+x.v:4:5: error: Linux is not supported
+    2 |
+    3 | $if linux {
+    4 |     $compile_error('Linux is not supported')
+      |     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    5 | }
+    6 |
+```
 
 ### Environment specific files
 
@@ -5672,8 +5707,6 @@ For more examples, see [github.com/vlang/v/tree/master/vlib/v/tests/assembly/asm
 
 ## Translating C to V
 
-TODO: translating C to V will be available in V 0.3.
-
 V can translate your C code to human readable V code and generate V wrappers on top of C libraries.
 
 
@@ -5775,7 +5808,12 @@ or
 ```shell
 v -os linux .
 ```
+NB: Cross-compiling a windows binary on a linux machine requires the GNU C compiler for 
+MinGW-w64 (targeting Win64) to first be installed.
 
+```shell
+sudo apt-get install gcc-mingw-w64-x86-64
+```
 (Cross compiling for macOS is temporarily not possible.)
 
 If you don't have any C dependencies, that's all you need to do. This works even
@@ -5811,7 +5849,7 @@ fn sh(cmd string){
 rmdir_all('build') or { }
 
 // Create build/, never fails as build/ does not exist
-mkdir('build') ?
+mkdir('build')?
 
 // Move *.v files to build/
 result := execute('mv *.v build/')
@@ -5822,7 +5860,7 @@ if result.exit_code != 0 {
 sh('ls')
 
 // Similar to:
-// files := ls('.') ?
+// files := ls('.')?
 // mut count := 0
 // if files.len > 0 {
 //     for file in files {
@@ -5883,6 +5921,19 @@ fn main() {
 }
 ```
 
+Struct field deprecations:
+```v oksyntax
+module abc
+
+// Note that only *direct* accesses to Xyz.d in *other modules*, will produce deprecation notices/warnings:
+pub struct Xyz {
+pub mut:
+	a int
+	d int [deprecated: 'use Xyz.a instead'; deprecated_after: '2999-03-01'] // produce a notice, the deprecation date is in the far future
+}
+```
+
+Function/method deprecations:
 ```v
 // Calling this function will result in a deprecation warning
 [deprecated]
@@ -6026,7 +6077,7 @@ a nested loop, and those do not risk violating memory-safety.
 
 ## Appendix I: Keywords
 
-V has 41 reserved keywords (3 are literals):
+V has 42 reserved keywords (3 are literals):
 
 ```v ignore
 as
@@ -6038,7 +6089,6 @@ const
 continue
 defer
 else
-embed
 enum
 false
 fn
@@ -6050,6 +6100,7 @@ import
 in
 interface
 is
+isreftype
 lock
 match
 module
@@ -6097,15 +6148,15 @@ This lists operators for [primitive types](#primitive-types) only.
 
 <<   left shift             integer << unsigned integer
 >>   right shift            integer >> unsigned integer
->>>  unsigned right shift	integer >> unsigned integer
+>>>  unsigned right shift   integer >> unsigned integer
 
 
 Precedence    Operator
-    5             *  /  %  <<  >> >>> &
-    4             +  -  |  ^
-    3             ==  !=  <  <=  >  >=
-    2             &&
-    1             ||
+    5            *  /  %  <<  >> >>> &
+    4            +  -  |  ^
+    3            ==  !=  <  <=  >  >=
+    2            &&
+    1            ||
 
 
 Assignment Operators

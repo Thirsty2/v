@@ -256,13 +256,14 @@ pub:
 	mut_pos    token.Pos
 	next_token token.Kind
 pub mut:
-	expr             Expr // expr.field_name
-	expr_type        Type // type of `Foo` in `Foo.bar`
-	typ              Type // type of the entire thing (`Foo.bar`)
-	name_type        Type // T in `T.name` or typeof in `typeof(expr).name`
-	gkind_field      GenericKindField // `T.name` => ast.GenericKindField.name, `T.typ` => ast.GenericKindField.typ, or .unknown
-	scope            &Scope
-	from_embed_types []Type // holds the type of the embed that the method is called from
+	expr                Expr // expr.field_name
+	expr_type           Type // type of `Foo` in `Foo.bar`
+	typ                 Type // type of the entire thing (`Foo.bar`)
+	name_type           Type // T in `T.name` or typeof in `typeof(expr).name`
+	gkind_field         GenericKindField // `T.name` => ast.GenericKindField.name, `T.typ` => ast.GenericKindField.typ, or .unknown
+	scope               &Scope
+	from_embed_types    []Type // holds the type of the embed that the method is called from
+	has_hidden_receiver bool
 }
 
 // root_ident returns the origin ident where the selector started.
@@ -303,6 +304,10 @@ pub:
 	is_mut           bool
 	is_global        bool
 	is_volatile      bool
+	//
+	is_deprecated    bool
+	deprecation_msg  string
+	deprecated_after string
 pub mut:
 	default_expr     Expr
 	default_expr_typ Type
@@ -544,7 +549,7 @@ pub mut:
 	end_comments  []Comment // comments *after* header declarations. E.g.: `fn C.C_func(x int) int // Comment`
 	next_comments []Comment // comments that are one line after the decl; used for InterfaceDecl
 	//
-	source_file &File = 0
+	source_file &File = unsafe { 0 }
 	scope       &Scope
 	label_names []string
 	pos         token.Pos // function declaration position
@@ -857,8 +862,9 @@ pub mut:
 // ++, --
 pub struct PostfixExpr {
 pub:
-	op  token.Kind
-	pos token.Pos
+	op            token.Kind
+	pos           token.Pos
+	is_c2v_prefix bool // for `--x` (`x--$`), only for translated code until c2v can handle it
 pub mut:
 	expr        Expr
 	auto_locked string
@@ -1166,6 +1172,7 @@ pub:
 	name          string
 	is_pub        bool
 	pos           token.Pos
+	name_pos      token.Pos
 	comments      []Comment
 	typ           Type
 	generic_types []Type
@@ -1264,8 +1271,9 @@ pub mut:
 
 pub struct ChanInit {
 pub:
-	pos     token.Pos
-	has_cap bool
+	pos           token.Pos
+	elem_type_pos token.Pos
+	has_cap       bool
 pub mut:
 	cap_expr  Expr
 	typ       Type
@@ -1819,9 +1827,9 @@ pub fn (expr Expr) is_expr() bool {
 	return true
 }
 
-pub fn (expr Expr) is_lit() bool {
+pub fn (expr Expr) is_pure_literal() bool {
 	return match expr {
-		BoolLiteral, CharLiteral, StringLiteral, IntegerLiteral { true }
+		BoolLiteral, CharLiteral, FloatLiteral, StringLiteral, IntegerLiteral { true }
 		else { false }
 	}
 }

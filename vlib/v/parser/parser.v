@@ -23,7 +23,6 @@ mut:
 	file_name_dir     string       // "/home/user"
 	unique_prefix     string       // a hash of p.file_name, used for making anon fn generation unique
 	file_backend_mode ast.Language // .c for .c.v|.c.vv|.c.vsh files; .js for .js.v files, .amd64/.rv32/other arches for .amd64.v/.rv32.v/etc. files, .v otherwise.
-	scanner           &scanner.Scanner
 	comments_mode     scanner.CommentsMode = .skip_comments
 	// see comment in parse_file
 	tok                       token.Token
@@ -36,6 +35,7 @@ mut:
 	inside_vlib_file          bool // true for all vlib/ files
 	inside_test_file          bool // when inside _test.v or _test.vv file
 	inside_if                 bool
+	inside_comptime_if        bool
 	inside_if_expr            bool
 	inside_if_cond            bool
 	inside_ct_if_expr         bool
@@ -78,10 +78,6 @@ mut:
 	returns                   bool
 	is_stmt_ident             bool // true while the beginning of a statement is an ident/selector
 	expecting_type            bool // `is Type`, expecting type
-	errors                    []errors.Error
-	warnings                  []errors.Warning
-	notices                   []errors.Notice
-	vet_errors                []vet.Error
 	cur_fn_name               string
 	label_names               []string
 	name_error                bool // indicates if the token is not a name or the name is on another line
@@ -93,6 +89,14 @@ mut:
 	codegen_text              string
 	struct_init_generic_types []ast.Type
 	if_cond_comments          []ast.Comment
+	script_mode               bool
+	script_mode_start_token   token.Token
+pub mut:
+	scanner    &scanner.Scanner
+	errors     []errors.Error
+	warnings   []errors.Warning
+	notices    []errors.Notice
+	vet_errors []vet.Error
 }
 
 __global codegen_files = []&ast.File{}
@@ -460,7 +464,7 @@ pub fn (p &Parser) peek_token(n int) token.Token {
 }
 
 // peek token in if guard `if x,y := opt()` after var_list `x,y`
-pub fn (p &Parser) peek_token_after_var_list() token.Token {
+fn (p &Parser) peek_token_after_var_list() token.Token {
 	mut n := 0
 	mut tok := p.tok
 	for {
@@ -478,6 +482,27 @@ pub fn (p &Parser) peek_token_after_var_list() token.Token {
 		}
 	}
 	return tok
+}
+
+fn (p &Parser) is_array_type() bool {
+	mut i := 1
+	mut tok := p.tok
+	line_nr := p.tok.line_nr
+
+	for {
+		tok = p.peek_token(i)
+		if tok.line_nr != line_nr {
+			return false
+		}
+		if tok.kind in [.name, .amp] {
+			return true
+		}
+		i++
+		if tok.kind == .lsbr || tok.kind != .rsbr {
+			continue
+		}
+	}
+	return false
 }
 
 pub fn (mut p Parser) open_scope() {
@@ -640,10 +665,18 @@ pub fn (mut p Parser) top_stmt() ast.Stmt {
 				return p.struct_decl()
 			}
 			.dollar {
+				if p.peek_tok.kind == .eof {
+					return p.error('unexpected eof')
+				}
 				if_expr := p.if_expr(true)
-				return ast.ExprStmt{
+				cur_stmt := ast.ExprStmt{
 					expr: if_expr
 					pos: if_expr.pos
+				}
+				if comptime_if_expr_contains_top_stmt(if_expr) {
+					return cur_stmt
+				} else {
+					return p.other_stmts(cur_stmt)
 				}
 			}
 			.hash {
@@ -662,30 +695,7 @@ pub fn (mut p Parser) top_stmt() ast.Stmt {
 				return p.comment_stmt()
 			}
 			else {
-				p.inside_fn = true
-				if p.pref.is_script && !p.pref.is_test {
-					p.open_scope()
-					mut stmts := []ast.Stmt{}
-					for p.tok.kind != .eof {
-						stmts << p.stmt(false)
-					}
-					p.close_scope()
-					return ast.FnDecl{
-						name: 'main.main'
-						short_name: 'main'
-						mod: 'main'
-						is_main: true
-						stmts: stmts
-						file: p.file_name
-						return_type: ast.void_type
-						scope: p.scope
-						label_names: p.label_names
-					}
-				} else if p.pref.is_fmt {
-					return p.stmt(false)
-				} else {
-					return p.error('bad top level statement ' + p.tok.str())
-				}
+				return p.other_stmts(ast.empty_stmt())
 			}
 		}
 		if p.should_abort {
@@ -695,6 +705,66 @@ pub fn (mut p Parser) top_stmt() ast.Stmt {
 	// TODO remove dummy return statement
 	// the compiler complains if it's not there
 	return ast.empty_stmt()
+}
+
+fn comptime_if_expr_contains_top_stmt(if_expr ast.IfExpr) bool {
+	for branch in if_expr.branches {
+		for stmt in branch.stmts {
+			if stmt is ast.ExprStmt {
+				if stmt.expr is ast.IfExpr {
+					if !comptime_if_expr_contains_top_stmt(stmt.expr) {
+						return false
+					}
+				} else if stmt.expr is ast.CallExpr {
+					return false
+				}
+			} else if stmt is ast.AssignStmt {
+				return false
+			} else if stmt is ast.HashStmt {
+				return true
+			}
+		}
+	}
+	return true
+}
+
+fn (mut p Parser) other_stmts(cur_stmt ast.Stmt) ast.Stmt {
+	p.inside_fn = true
+	if p.pref.is_script && !p.pref.is_test {
+		p.script_mode = true
+		p.script_mode_start_token = p.tok
+
+		if p.table.known_fn('main.main') {
+			p.error('function `main` is already defined, put your script statements inside it')
+		}
+
+		p.open_scope()
+		mut stmts := []ast.Stmt{}
+		if cur_stmt != ast.empty_stmt() {
+			stmts << cur_stmt
+		}
+		for p.tok.kind != .eof {
+			stmts << p.stmt(false)
+		}
+		p.close_scope()
+
+		p.script_mode = false
+		return ast.FnDecl{
+			name: 'main.main'
+			short_name: 'main'
+			mod: 'main'
+			is_main: true
+			stmts: stmts
+			file: p.file_name
+			return_type: ast.void_type
+			scope: p.scope
+			label_names: p.label_names
+		}
+	} else if p.pref.is_fmt {
+		return p.stmt(false)
+	} else {
+		return p.error('bad top level statement ' + p.tok.str())
+	}
 }
 
 // TODO [if vfmt]
@@ -1754,10 +1824,12 @@ pub fn (mut p Parser) note(s string) {
 }
 
 pub fn (mut p Parser) error_with_pos(s string, pos token.Pos) ast.NodeError {
+	mut kind := 'error:'
 	if p.pref.fatal_errors {
+		ferror := util.formatted_error(kind, s, p.file_name, pos)
+		eprintln(ferror)
 		exit(1)
 	}
-	mut kind := 'error:'
 	if p.pref.output_mode == .stdout && !p.pref.check_only {
 		if p.pref.is_verbose {
 			print_backtrace()
@@ -1794,10 +1866,12 @@ pub fn (mut p Parser) error_with_pos(s string, pos token.Pos) ast.NodeError {
 }
 
 pub fn (mut p Parser) error_with_error(error errors.Error) {
+	mut kind := 'error:'
 	if p.pref.fatal_errors {
+		ferror := util.formatted_error(kind, error.message, error.file_path, error.pos)
+		eprintln(ferror)
 		exit(1)
 	}
-	mut kind := 'error:'
 	if p.pref.output_mode == .stdout && !p.pref.check_only {
 		if p.pref.is_verbose {
 			print_backtrace()
@@ -1907,7 +1981,7 @@ fn (mut p Parser) parse_multi_expr(is_top_level bool) ast.Stmt {
 	// TODO remove translated
 	if p.tok.kind in [.assign, .decl_assign] || p.tok.kind.is_assign() {
 		return p.partial_assign_stmt(left, left_comments)
-	} else if !p.pref.translated && !p.is_translated && !p.pref.is_fmt
+	} else if !p.pref.translated && !p.is_translated && !p.pref.is_fmt && !p.pref.is_vet
 		&& tok.kind !in [.key_if, .key_match, .key_lock, .key_rlock, .key_select] {
 		for node in left {
 			if (is_top_level || p.tok.kind != .rcbr) && node !is ast.CallExpr
@@ -2168,7 +2242,9 @@ pub fn (mut p Parser) name_expr() ast.Expr {
 	if p.tok.lit == 'chan' {
 		first_pos := p.tok.pos()
 		mut last_pos := first_pos
+		mut elem_type_pos := p.peek_tok.pos()
 		chan_type := p.parse_chan_type()
+		elem_type_pos = elem_type_pos.extend(p.prev_tok.pos())
 		mut has_cap := false
 		mut cap_expr := ast.empty_expr()
 		p.check(.lcbr)
@@ -2195,6 +2271,7 @@ pub fn (mut p Parser) name_expr() ast.Expr {
 		}
 		return ast.ChanInit{
 			pos: first_pos.extend(last_pos)
+			elem_type_pos: elem_type_pos
 			has_cap: has_cap
 			cap_expr: cap_expr
 			typ: chan_type
@@ -2310,6 +2387,9 @@ pub fn (mut p Parser) name_expr() ast.Expr {
 				arg = p.expr(0) // len
 				has_arg = true
 			}
+			if p.tok.kind == .comma && p.peek_tok.kind == .rpar {
+				p.next()
+			}
 			end_pos := p.tok.pos()
 			p.check(.rpar)
 			node = ast.CastExpr{
@@ -2346,9 +2426,10 @@ pub fn (mut p Parser) name_expr() ast.Expr {
 		&& !p.inside_match_case && (!p.inside_if || p.inside_select)
 		&& (!p.inside_for || p.inside_select) && !known_var {
 		return p.struct_init(p.mod + '.' + p.tok.lit, false) // short_syntax: false
-	} else if p.peek_tok.kind == .lcbr && p.inside_if && lit0_is_capital && !known_var
-		&& language == .v {
-		// if a == Foo{} {...}
+	} else if p.peek_tok.kind == .lcbr
+		&& ((p.inside_if && lit0_is_capital && p.tok.lit.len > 1 && !known_var && language == .v)
+		|| (p.inside_match_case && p.tok.kind == .name && p.peek_tok.pos - p.tok.pos == p.tok.len)) {
+		// `if a == Foo{} {...}` or `match foo { Foo{} {...} }`
 		return p.struct_init(p.mod + '.' + p.tok.lit, false)
 	} else if p.peek_tok.kind == .dot && (lit0_is_capital && !known_var && language == .v) {
 		// T.name
@@ -3255,6 +3336,9 @@ fn (mut p Parser) const_decl() ast.ConstDecl {
 		p.next()
 	}
 	const_pos := p.tok.pos()
+	if p.disallow_declarations_in_script_mode() {
+		return ast.ConstDecl{}
+	}
 	p.check(.key_const)
 	is_block := p.tok.kind == .lpar
 	if is_block {
@@ -3280,6 +3364,9 @@ fn (mut p Parser) const_decl() ast.ConstDecl {
 				pos)
 		}
 		full_name := p.prepend_mod(name)
+		if p.tok.kind == .comma {
+			p.error_with_pos('const declaration do not support multiple assign yet', p.tok.pos())
+		}
 		p.check(.assign)
 		end_comments << p.eat_comments()
 		if p.tok.kind == .key_fn {
@@ -3369,6 +3456,9 @@ fn (mut p Parser) global_decl() ast.GlobalDecl {
 	}
 	start_pos := p.tok.pos()
 	p.check(.key_global)
+	if p.disallow_declarations_in_script_mode() {
+		return ast.GlobalDecl{}
+	}
 	is_block := p.tok.kind == .lpar
 	if is_block {
 		p.next() // (
@@ -3464,6 +3554,9 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 	}
 	p.check(.key_enum)
 	end_pos := p.tok.pos()
+	if p.disallow_declarations_in_script_mode() {
+		return ast.EnumDecl{}
+	}
 	enum_name := p.check_name()
 	if enum_name.len == 1 {
 		p.error_with_pos('single letter capital names are reserved for generic template types.',
@@ -3576,10 +3669,13 @@ fn (mut p Parser) type_decl() ast.TypeDecl {
 	end_pos := p.tok.pos()
 	decl_pos := start_pos.extend(end_pos)
 	name_pos := p.tok.pos()
+	if p.disallow_declarations_in_script_mode() {
+		return ast.SumTypeDecl{}
+	}
 	name := p.check_name()
 	if name.len == 1 && name[0].is_capital() {
-		p.error_with_pos('single letter capital names are reserved for generic template types.',
-			decl_pos)
+		p.error_with_pos('single letter capital names are reserved for generic template types',
+			name_pos)
 		return ast.FnTypeDecl{}
 	}
 	if name in p.imported_symbols {
@@ -3651,6 +3747,7 @@ fn (mut p Parser) type_decl() ast.TypeDecl {
 			generic_types: generic_types
 			attrs: p.attrs
 			pos: decl_pos
+			name_pos: name_pos
 			comments: comments
 		}
 	}
@@ -3865,6 +3962,15 @@ fn (mut p Parser) unsafe_stmt() ast.Stmt {
 		is_unsafe: true
 		pos: pos
 	}
+}
+
+fn (mut p Parser) disallow_declarations_in_script_mode() bool {
+	if p.script_mode {
+		p.note_with_pos('script mode started here', p.script_mode_start_token.pos())
+		p.error_with_pos('all definitions must occur before code in script mode', p.tok.pos())
+		return true
+	}
+	return false
 }
 
 fn (mut p Parser) trace(fbase string, message string) {

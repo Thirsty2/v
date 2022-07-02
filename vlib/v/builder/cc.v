@@ -93,6 +93,14 @@ fn (mut v Builder) post_process_c_compiler_output(res os.Result) {
 		}
 		return
 	}
+	if res.exit_code != 0 && v.pref.gc_mode != .no_gc && res.output.contains('libgc.a')
+		&& !v.pref.is_o {
+		$if windows {
+			verror(r'Your V installation may be out-of-date. Try removing `thirdparty\tcc\` and running `.\make.bat`')
+		} $else {
+			verror('Your V installation may be out-of-date. Try removing `thirdparty/tcc/` and running `make`')
+		}
+	}
 	for emsg_marker in [builder.c_verror_message_marker, 'error: include file '] {
 		if res.output.contains(emsg_marker) {
 			emessage := res.output.all_after(emsg_marker).all_before('\n').all_before('\r').trim_right('\r\n')
@@ -291,6 +299,9 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	if v.pref.sanitize {
 		ccoptions.args << '-fsanitize=leak'
 	}
+	if v.pref.is_o {
+		ccoptions.args << '-c'
+	}
 	//
 	ccoptions.shared_postfix = '.so'
 	$if macos {
@@ -418,6 +429,21 @@ fn (v &Builder) all_args(ccoptions CcompilerOptions) []string {
 	}
 	all << ccoptions.args
 	all << ccoptions.o_args
+	$if windows {
+		// Adding default options for tcc, gcc and clang as done in msvc.v.
+		// This is done before pre_args is added so that it can be overwritten if needed.
+		// -Wl,-stack=16777216 == /F 16777216
+		// -Werror=implicit-function-declaration == /we4013
+		// /volatile:ms - there seems to be no equivalent,
+		// normally msvc should use /volatile:iso
+		// but it could have an impact on vinix if it is created with msvc.
+		if !ccoptions.is_cc_msvc {
+			all << '-Wl,-stack=16777216'
+			if !v.pref.is_cstrict {
+				all << '-Werror=implicit-function-declaration'
+			}
+		}
+	}
 	all << ccoptions.pre_args
 	all << ccoptions.source_args
 	all << ccoptions.post_args
@@ -466,17 +492,6 @@ fn (mut v Builder) setup_output_name() {
 		verror("'$v.pref.out_name' is a directory")
 	}
 	v.ccoptions.o_args << '-o "$v.pref.out_name"'
-}
-
-fn (mut v Builder) dump_c_options(all_args []string) {
-	if v.pref.dump_c_flags != '' {
-		non_empty_args := all_args.filter(it != '').join('\n') + '\n'
-		if v.pref.dump_c_flags == '-' {
-			print(non_empty_args)
-		} else {
-			os.write_file(v.pref.dump_c_flags, non_empty_args) or { panic(err) }
-		}
-	}
 }
 
 pub fn (mut v Builder) cc() {
@@ -661,10 +676,6 @@ pub fn (mut v Builder) cc() {
 		break
 	}
 	if v.pref.compress {
-		$if windows {
-			println('-compress does not work on Windows for now')
-			return
-		}
 		ret := os.system('strip $v.pref.out_name')
 		if ret != 0 {
 			println('strip failed')
@@ -685,7 +696,7 @@ pub fn (mut v Builder) cc() {
 				println('install upx\n' + 'for example, on Debian/Ubuntu run `sudo apt install upx`')
 			}
 			$if windows {
-				// :)
+				println('install upx')
 			}
 		}
 	}
@@ -739,7 +750,13 @@ fn (mut b Builder) cc_linux_cross() {
 	cc_args << '-c "$b.out_name_c"'
 	cc_args << libs
 	b.dump_c_options(cc_args)
-	cc_cmd := '${os.quoted_path('cc')} ' + cc_args.join(' ')
+	mut cc_name := 'cc'
+	mut out_name := b.pref.out_name
+	$if windows {
+		cc_name = 'clang.exe'
+		out_name = out_name.trim_string_right('.exe')
+	}
+	cc_cmd := '${os.quoted_path(cc_name)} ' + cc_args.join(' ')
 	if b.pref.show_cc {
 		println(cc_cmd)
 	}
@@ -750,14 +767,17 @@ fn (mut b Builder) cc_linux_cross() {
 		return
 	}
 	mut linker_args := ['-L$sysroot/usr/lib/x86_64-linux-gnu/', '-L$sysroot/lib/x86_64-linux-gnu',
-		'--sysroot=$sysroot', '-v', '-o $b.pref.out_name', '-m elf_x86_64',
+		'--sysroot=$sysroot', '-v', '-o $out_name', '-m elf_x86_64',
 		'-dynamic-linker /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2',
 		'$sysroot/crt1.o $sysroot/crti.o $obj_file', '-lc', '-lcrypto', '-lssl', '-lpthread',
 		'$sysroot/crtn.o', '-lm']
 	linker_args << cflags.c_options_only_object_files()
 	// -ldl
 	b.dump_c_options(linker_args)
-	ldlld := '$sysroot/ld.lld'
+	mut ldlld := '$sysroot/ld.lld'
+	$if windows {
+		ldlld = 'ld.lld.exe'
+	}
 	linker_cmd := '${os.quoted_path(ldlld)} ' + linker_args.join(' ')
 	// s = s.replace('SYSROOT', sysroot) // TODO $ inter bug
 	// s = s.replace('-o hi', '-o ' + c.pref.out_name)
@@ -770,7 +790,7 @@ fn (mut b Builder) cc_linux_cross() {
 		verror(res.output)
 		return
 	}
-	println(b.pref.out_name + ' has been successfully compiled')
+	println(out_name + ' has been successfully compiled')
 }
 
 fn (mut c Builder) cc_windows_cross() {

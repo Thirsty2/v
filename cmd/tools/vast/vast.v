@@ -44,7 +44,7 @@ fn main() {
 	for hf in hfields.split(',') {
 		ctx.hide_names[hf] = true
 	}
-	fp.limit_free_args_to_at_least(1) ?
+	fp.limit_free_args_to_at_least(1)?
 	rest_of_args := fp.remaining_parameters()
 	for vfile in rest_of_args {
 		file := get_abs_path(vfile)
@@ -1358,6 +1358,7 @@ fn (t Tree) postfix_expr(node ast.PostfixExpr) &Node {
 	obj.add_terse('expr', t.expr(node.expr))
 	obj.add('auto_locked', t.string_node(node.auto_locked))
 	obj.add('pos', t.pos(node.pos))
+	obj.add('is_c2v_prefix', t.bool_node(node.is_c2v_prefix))
 	return obj
 }
 

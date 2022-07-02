@@ -24,7 +24,6 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 	mut or_kind := ast.OrKind.absent
 	if fn_name == 'json.decode' {
 		p.expecting_type = true // Makes name_expr() parse the type `User` in `json.decode(User, txt)`
-		or_kind = .block
 	}
 
 	old_expr_mod := p.expr_mod
@@ -223,7 +222,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 					p.tok.pos())
 			}
 			'_fastcall' {
-				p.note_with_pos('teh tag [_fastcall] has been deprecated, it will be an error after 2022-06-01, use `[callconv: fastcall]` instead',
+				p.note_with_pos('the tag [_fastcall] has been deprecated, it will be an error after 2022-06-01, use `[callconv: fastcall]` instead',
 					p.tok.pos())
 			}
 			'callconv' {
@@ -352,8 +351,9 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	if is_method && rec.typ.has_flag(.generic) {
 		sym := p.table.sym(rec.typ)
 		if sym.info is ast.Struct {
-			rec_generic_names := sym.info.generic_types.map(p.table.sym(it).name)
-			for gname in rec_generic_names {
+			fn_generic_names := generic_names.clone()
+			generic_names = sym.info.generic_types.map(p.table.sym(it).name)
+			for gname in fn_generic_names {
 				if gname !in generic_names {
 					generic_names << gname
 				}
@@ -398,6 +398,11 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		return_type = p.parse_type()
 		p.inside_fn_return = false
 		return_type_pos = return_type_pos.extend(p.prev_tok.pos())
+	}
+	if p.tok.kind == .comma {
+		mr_pos := return_type_pos.extend(p.peek_tok.pos())
+		p.error_with_pos('multiple return types in function declaration must use parentheses, e.g. (int, string)',
+			mr_pos)
 	}
 	mut type_sym_method_idx := 0
 	no_body := p.tok.kind != .lcbr
@@ -672,10 +677,10 @@ fn (mut p Parser) fn_receiver(mut params []ast.Param, mut rec ReceiverParsingInf
 fn (mut p Parser) anon_fn() ast.AnonFn {
 	pos := p.tok.pos()
 	p.check(.key_fn)
-	if p.pref.is_script && p.tok.kind == .name {
-		p.error_with_pos('function declarations in script mode should be before all script statements',
-			p.tok.pos())
-		return ast.AnonFn{}
+	if p.tok.kind == .name {
+		if p.disallow_declarations_in_script_mode() {
+			return ast.AnonFn{}
+		}
 	}
 	old_inside_defer := p.inside_defer
 	p.inside_defer = false
@@ -746,6 +751,17 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 	typ := ast.new_type(idx)
 	p.inside_defer = old_inside_defer
 	// name := p.table.get_type_name(typ)
+	if inherited_vars.len > 0 && args.len > 0 {
+		for arg in args {
+			for var in inherited_vars {
+				if arg.name == var.name {
+					p.error_with_pos('the parameter name `$arg.name` conflicts with the captured value name',
+						arg.pos)
+					break
+				}
+			}
+		}
+	}
 	return ast.AnonFn{
 		decl: ast.FnDecl{
 			name: name

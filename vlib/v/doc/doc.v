@@ -39,6 +39,7 @@ pub enum Platform {
 	dragonfly
 	js // for interoperability in prefs.OS
 	android
+	termux // like android, but note that termux is running on devices natively, not cross compiling from other platforms
 	solaris
 	serenity
 	vinix
@@ -64,6 +65,7 @@ pub fn platform_from_string(platform_str string) ?Platform {
 		'serenity' { return .serenity }
 		'vinix' { return .vinix }
 		'android' { return .android }
+		'termux' { return .termux }
 		'haiku' { return .haiku }
 		'nix' { return .linux }
 		'' { return .auto }
@@ -513,7 +515,7 @@ pub fn generate(input_path string, pub_only bool, with_comments bool, platform P
 	doc.with_comments = with_comments
 	doc.filter_symbol_names = filter_symbol_names.filter(it.len != 0)
 	doc.prefs.os = if platform == .auto { pref.get_host_os() } else { pref.OS(int(platform)) }
-	doc.generate() ?
+	doc.generate()?
 	return doc
 }
 
@@ -526,6 +528,6 @@ pub fn generate_with_pos(input_path string, filename string, pos int) ?Doc {
 	doc.with_pos = true
 	doc.filename = filename
 	doc.pos = pos
-	doc.generate() ?
+	doc.generate()?
 	return doc
 }
