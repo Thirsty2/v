@@ -1,5 +1,6 @@
 #same container that golang use
-FROM buildpack-deps:buster-curl
+#FROM buildpack-deps:buster-curl
+FROM buildpack-deps:focal-curl
 
 LABEL maintainer="ANAGO Ronnel <anagoandy@gmail.com>"
 WORKDIR /opt/vlang
