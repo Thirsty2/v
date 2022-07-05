@@ -26,8 +26,12 @@ RUN apt-get update && apt-get install -y \
 COPY entrypoint.sh user-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh && chmod 777 /usr/local/bin/user-entrypoint.sh
 
-RUN wget https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad
-RUN chmod 444 doom1.wad
+WORKDIR /home/jenkins/Downloads
+RUN wget https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad && \
+    mv doom1.wad DOOM1.WAD && \
+    chmod 444 DOOM1.WAD
+
+WORKDIR /home/jenkins
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
@@ -37,15 +41,8 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # then build with: 
 # docker build -f Dockerfile.doom . -t doom:latest
 #
-# doug@doug-tp-ubuntu20:~/dk/github/vlang/doom/chocolate-doom/src/doom$ 
+# doug@doug-tp-ubuntu20:~/dk/github/vlang/doom/
 #
-# docker run -it --rm -e DISPLAY=$DISPLAY -v "/tmp/.X11-unix:/tmp/.X11-unix" -v $(pwd):/home/jenkins -e CPATH='/home/jenkins:/home/jenkins/src:/home/jenkins/src/doom' -e MY_UID=`id -u $USER` doom:latest bash
-# 
-# Add audio with:
 # docker run -it --rm -e DISPLAY=$DISPLAY -v "/tmp/.X11-unix:/tmp/.X11-unix" -v $(pwd):/home/jenkins/code/doom --device /dev/snd -e CPATH='/home/jenkins/code/doom/chocolate-doom:/home/jenkins/code/doom/chocolate-doom/src:/home/jenkins/code/doom/chocolate-doom/src/doom' -e MY_UID=`id -u $USER` --name doom doom:latest bash
-# export CPATH=/home/jenkins:/home/jenkins/src:/home/jenkins/src/doom
-# cd
-# mkdir Downloads
-# ln /opt/vlang/doom1.wad Downloads/DOOM1.WAD
-# cd /code/doom
-# ./doomv
+#
+# ./code/doom/chocolate-doom/src/doom/doomv
