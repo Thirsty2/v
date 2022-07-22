@@ -1272,6 +1272,8 @@ val2 := arr[333]?
 println(val2)
 ```
 
+Maps are ordered by insertion, like dictionaries in Python. The order is a guaranteed language feature. This may change in the future.
+
 ## Module imports
 
 For information about creating a module, see [Modules](#modules).
@@ -2091,12 +2093,13 @@ Public immutable fields are readonly everywhere.
 V supports anonymous structs: structs that don't have to be declared separately
 with a struct name.
 
-```
+```v
 struct Book {
 	author struct  {
 		name string
 		age  int
 	}
+
 	title string
 }
 
@@ -3415,7 +3418,7 @@ import net.http
 
 fn f(url string) ?string {
 	resp := http.get(url)?
-	return resp.text
+	return resp.body
 }
 ```
 
@@ -3430,7 +3433,7 @@ The body of `f` is essentially a condensed version of:
 
 ```v ignore
     resp := http.get(url) or { return err }
-    return resp.text
+    return resp.body
 ```
 
 ---
@@ -3474,7 +3477,7 @@ The fourth method is to use `if` unwrapping:
 import net.http
 
 if resp := http.get('https://google.com') {
-	println(resp.text) // resp is a http.Response, not an optional
+	println(resp.body) // resp is a http.Response, not an optional
 } else {
 	println(err)
 }
@@ -3600,6 +3603,11 @@ fn p(a f64, b f64) { // ordinary function without return value
 fn main() {
 	go p(3, 4)
 	// p will be run in parallel thread
+	// It can also be written as follows
+	// go fn (a f64, b f64) {
+	//	c := math.sqrt(a * a + b * b)
+	//	println(c)
+	// }(3, 4)
 }
 ```
 

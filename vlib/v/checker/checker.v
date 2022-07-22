@@ -69,7 +69,7 @@ pub mut:
 	expected_or_type          ast.Type        // fn() or { 'this type' } eg. string. expected or block type
 	expected_expr_type        ast.Type        // if/match is_expr: expected_type
 	mod                       string          // current module name
-	const_var                 &ast.ConstField = voidptr(0) // the current constant, when checking const declarations
+	const_var                 &ast.ConstField = unsafe { nil } // the current constant, when checking const declarations
 	const_deps                []string
 	const_names               []string
 	global_names              []string
@@ -112,7 +112,7 @@ mut:
 	timers                           &util.Timers = util.get_timers()
 	comptime_fields_default_type     ast.Type
 	comptime_fields_type             map[string]ast.Type
-	fn_scope                         &ast.Scope = voidptr(0)
+	fn_scope                         &ast.Scope = unsafe { nil }
 	main_fn_decl_node                ast.FnDecl
 	match_exhaustive_cutoff_limit    int = 10
 	is_last_stmt                     bool
@@ -143,7 +143,7 @@ pub fn new_checker(table &ast.Table, pref &pref.Preferences) &Checker {
 fn (mut c Checker) reset_checker_state_at_start_of_new_file() {
 	c.expected_type = ast.void_type
 	c.expected_or_type = ast.void_type
-	c.const_var = voidptr(0)
+	c.const_var = unsafe { nil }
 	c.in_for_count = 0
 	c.returns = false
 	c.scope_returns = false
@@ -1338,6 +1338,23 @@ pub fn (mut c Checker) const_decl(mut node ast.ConstDecl) {
 			}
 		}
 		node.fields[i].typ = ast.mktyp(typ)
+		if mut field.expr is ast.IfExpr {
+			if field.expr.branches.len == 2 {
+				first_stmts := field.expr.branches[0].stmts
+				second_stmts := field.expr.branches[1].stmts
+				if first_stmts.len > 0 && first_stmts.last() is ast.ExprStmt
+					&& (first_stmts.last() as ast.ExprStmt).typ != ast.void_type {
+					field.expr.is_expr = true
+					field.expr.typ = (first_stmts.last() as ast.ExprStmt).typ
+					field.typ = field.expr.typ
+				} else if second_stmts.len > 0 && second_stmts.last() is ast.ExprStmt
+					&& (second_stmts.last() as ast.ExprStmt).typ != ast.void_type {
+					field.expr.is_expr = true
+					field.expr.typ = (second_stmts.last() as ast.ExprStmt).typ
+					field.typ = field.expr.typ
+				}
+			}
+		}
 		c.const_deps = []
 		c.const_var = prev_const_var
 	}
@@ -2903,7 +2920,11 @@ pub fn (mut c Checker) concat_expr(mut node ast.ConcatExpr) ast.Type {
 // smartcast takes the expression with the current type which should be smartcasted to the target type in the given scope
 fn (mut c Checker) smartcast(expr_ ast.Expr, cur_type ast.Type, to_type_ ast.Type, mut scope ast.Scope) {
 	sym := c.table.sym(cur_type)
-	to_type := if sym.kind == .interface_ { to_type_.ref() } else { to_type_ }
+	to_type := if sym.kind == .interface_ && c.table.sym(to_type_).kind != .interface_ {
+		to_type_.ref()
+	} else {
+		to_type_
+	}
 	mut expr := unsafe { expr_ }
 	match mut expr {
 		ast.SelectorExpr {
@@ -3099,7 +3120,7 @@ fn (mut c Checker) find_obj_definition(obj ast.ScopeObject) ?ast.Expr {
 	match obj {
 		ast.Var, ast.ConstField, ast.GlobalField, ast.AsmRegister { name = obj.name }
 	}
-	mut expr := ast.empty_expr()
+	mut expr := ast.empty_expr
 	if obj is ast.Var {
 		if obj.is_mut {
 			return error('`$name` is mut and may have changed since its definition')
@@ -3158,7 +3179,7 @@ pub fn (mut c Checker) mark_as_referenced(mut node ast.Expr, as_interface bool) 
 		ast.Ident {
 			if mut node.obj is ast.Var {
 				mut obj := unsafe { &node.obj }
-				if c.fn_scope != voidptr(0) {
+				if c.fn_scope != unsafe { nil } {
 					obj = c.fn_scope.find_var(node.obj.name) or { obj }
 				}
 				if obj.typ == 0 {

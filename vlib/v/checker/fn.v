@@ -108,6 +108,17 @@ fn (mut c Checker) fn_decl(mut node ast.FnDecl) {
 		} else if return_sym.kind == .array_fixed {
 			c.error('fixed array cannot be returned by function', node.return_type_pos)
 		}
+		// Ensure each generic type of the parameter was declared in the function's definition
+		if node.return_type.has_flag(.generic) {
+			generic_names := c.table.generic_type_names(node.return_type)
+			for name in generic_names {
+				if name !in node.generic_names {
+					fn_generic_names := node.generic_names.join(', ')
+					c.error('generic type name `$name` is not mentioned in fn `$node.name<$fn_generic_names>`',
+						node.return_type_pos)
+				}
+			}
+		}
 	} else {
 		for mut a in node.attrs {
 			if a.kind == .comptime_define {
@@ -207,6 +218,7 @@ fn (mut c Checker) fn_decl(mut node ast.FnDecl) {
 					}
 				}
 			}
+			// Ensure each generic type of the parameter was declared in the function's definition
 			if param.typ.has_flag(.generic) {
 				generic_names := c.table.generic_type_names(param.typ)
 				for name in generic_names {
@@ -826,7 +838,15 @@ pub fn (mut c Checker) fn_call(mut node ast.CallExpr, mut continue_check &bool) 
 				c.error('too many arguments in call to `$func.name`', node.pos)
 			}
 		}
-		c.expected_type = param.typ
+		if func.is_variadic && i >= func.params.len - 1 {
+			param_sym := c.table.sym(param.typ)
+			if param_sym.kind == .array {
+				info := param_sym.array_info()
+				c.expected_type = info.elem_type
+			}
+		} else {
+			c.expected_type = param.typ
+		}
 
 		e_sym := c.table.sym(c.expected_type)
 		if call_arg.expr is ast.MapInit && e_sym.kind == .struct_ {
