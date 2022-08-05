@@ -36,9 +36,11 @@ pub const (
 	valid_comptime_not_user_defined  = all_valid_comptime_idents()
 	array_builtin_methods            = ['filter', 'clone', 'repeat', 'reverse', 'map', 'slice',
 		'sort', 'contains', 'index', 'wait', 'any', 'all', 'first', 'last', 'pop']
+	array_builtin_methods_chk        = token.new_keywords_matcher_from_array_trie(array_builtin_methods)
 	// TODO: remove `byte` from this list when it is no longer supported
 	reserved_type_names              = ['byte', 'bool', 'char', 'i8', 'i16', 'int', 'i64', 'u8',
 		'u16', 'u32', 'u64', 'f32', 'f64', 'map', 'string', 'rune']
+	reserved_type_names_chk          = token.new_keywords_matcher_from_array_trie(reserved_type_names)
 	vroot_is_deprecated_message      = '@VROOT is deprecated, use @VMODROOT or @VEXEROOT instead'
 )
 
@@ -125,6 +127,7 @@ mut:
 	inside_decl_rhs                  bool
 	inside_if_guard                  bool // true inside the guard condition of `if x := opt() {}`
 	comptime_call_pos                int  // needed for correctly checking use before decl for templates
+	goto_labels                      map[string]int // to check for unused goto labels
 }
 
 pub fn new_checker(table &ast.Table, pref &pref.Preferences) &Checker {
@@ -226,6 +229,7 @@ pub fn (mut c Checker) check(ast_file_ &ast.File) {
 	}
 
 	c.check_scope_vars(c.file.scope)
+	c.check_unused_labels()
 }
 
 pub fn (mut c Checker) check_scope_vars(sc &ast.Scope) {
@@ -1562,19 +1566,11 @@ fn (mut c Checker) stmt(node_ ast.Stmt) {
 		ast.GlobalDecl {
 			c.global_decl(mut node)
 		}
-		ast.GotoLabel {}
+		ast.GotoLabel {
+			c.goto_label(node)
+		}
 		ast.GotoStmt {
-			if c.inside_defer {
-				c.error('goto is not allowed in defer statements', node.pos)
-			}
-			if !c.inside_unsafe {
-				c.warn('`goto` requires `unsafe` (consider using labelled break/continue)',
-					node.pos)
-			}
-			if !isnil(c.table.cur_fn) && node.name !in c.table.cur_fn.label_names {
-				c.error('unknown label `$node.name`', node.pos)
-			}
-			// TODO: check label doesn't bypass variable declarations
+			c.goto_stmt(node)
 		}
 		ast.HashStmt {
 			c.hash_stmt(mut node)
@@ -1615,6 +1611,14 @@ fn (mut c Checker) assert_stmt(node ast.AssertStmt) {
 		atype_name := c.table.sym(assert_type).name
 		c.error('assert can be used only with `bool` expressions, but found `$atype_name` instead',
 			node.pos)
+	}
+	if node.extra !is ast.EmptyExpr {
+		extra_type := c.expr(node.extra)
+		if extra_type != ast.string_type {
+			extra_type_name := c.table.sym(extra_type).name
+			c.error('assert allows only a single string as its second argument, but found `$extra_type_name` instead',
+				node.extra_pos)
+		}
 	}
 	c.fail_if_unreadable(node.expr, ast.bool_type_idx, 'assertion')
 	c.expected_type = cur_exp_typ
@@ -2760,6 +2764,9 @@ pub fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 							} else {
 								typ = obj.expr.expr_type.clear_flag(.optional).clear_flag(.result)
 							}
+						} else if obj.expr is ast.EmptyExpr {
+							c.error('invalid variable `$node.name`', node.pos)
+							typ = ast.void_type
 						} else {
 							typ = c.expr(obj.expr)
 						}
@@ -3892,6 +3899,37 @@ pub fn (mut c Checker) fail_if_unreadable(expr ast.Expr, typ ast.Type, what stri
 	if typ.has_flag(.shared_f) {
 		c.error('you have to create a handle and `rlock` it to use a `shared` element as non-mut $what',
 			pos)
+	}
+}
+
+fn (mut c Checker) goto_label(node ast.GotoLabel) {
+	// Register a goto label
+	if c.goto_labels[node.name] == 0 {
+		c.goto_labels[node.name] = 0
+	}
+}
+
+pub fn (mut c Checker) goto_stmt(node ast.GotoStmt) {
+	if c.inside_defer {
+		c.error('goto is not allowed in defer statements', node.pos)
+	}
+	if !c.inside_unsafe {
+		c.warn('`goto` requires `unsafe` (consider using labelled break/continue)', node.pos)
+	}
+	if !isnil(c.table.cur_fn) && node.name !in c.table.cur_fn.label_names {
+		c.error('unknown label `$node.name`', node.pos)
+	}
+	c.goto_labels[node.name]++ // Register a label use
+	// TODO: check label doesn't bypass variable declarations
+}
+
+fn (mut c Checker) check_unused_labels() {
+	for label, nr_uses in c.goto_labels {
+		if nr_uses == 0 {
+			// TODO show label's location
+			c.warn('label `$label` defined and not used', token.Pos{})
+			c.goto_labels[label]++ // so that this warning is not shown again
+		}
 	}
 }
 

@@ -577,8 +577,38 @@ fn (mut p Parser) check(expected token.Kind) {
 		if token.is_key(s) || (s.len > 0 && !s[0].is_letter()) {
 			s = '`$s`'
 		}
-		p.error('unexpected $p.tok, expecting $s')
+		p.unexpected(expecting: s)
 	}
+}
+
+[params]
+struct ParamsForUnexpected {
+	got            string
+	expecting      string
+	prepend_msg    string
+	additional_msg string
+}
+
+fn (mut p Parser) unexpected(params ParamsForUnexpected) ast.NodeError {
+	return p.unexpected_with_pos(p.tok.pos(), params)
+}
+
+fn (mut p Parser) unexpected_with_pos(pos token.Pos, params ParamsForUnexpected) ast.NodeError {
+	mut msg := if params.got != '' {
+		'unexpected $params.got'
+	} else {
+		'unexpected $p.tok'
+	}
+	if params.expecting != '' {
+		msg += ', expecting $params.expecting'
+	}
+	if params.prepend_msg != '' {
+		msg = '$params.prepend_msg ' + msg
+	}
+	if params.additional_msg != '' {
+		msg += ', $params.additional_msg'
+	}
+	return p.error_with_pos(msg, pos)
 }
 
 // JS functions can have multiple dots in their name:
@@ -669,7 +699,7 @@ pub fn (mut p Parser) top_stmt() ast.Stmt {
 			}
 			.dollar {
 				if p.peek_tok.kind == .eof {
-					return p.error('unexpected eof')
+					return p.unexpected(got: 'eof')
 				}
 				if_expr := p.if_expr(true)
 				cur_stmt := ast.ExprStmt{
@@ -847,8 +877,19 @@ pub fn (mut p Parser) stmt(is_top_level bool) ast.Stmt {
 			mut pos := p.tok.pos()
 			expr := p.expr(0)
 			pos.update_last_line(p.prev_tok.line_nr)
+			mut extra := ast.empty_expr
+			mut extra_pos := p.tok.pos()
+			if p.tok.kind == .comma {
+				p.next()
+				extra_pos = p.tok.pos()
+				extra = p.expr(0)
+				// dump(extra)
+				extra_pos = extra_pos.extend(p.tok.pos())
+			}
 			return ast.AssertStmt{
 				expr: expr
+				extra: extra
+				extra_pos: extra_pos
 				pos: pos.extend(p.tok.pos())
 				is_used: p.inside_test_file || !p.pref.is_prod
 			}
@@ -895,7 +936,7 @@ pub fn (mut p Parser) stmt(is_top_level bool) ast.Stmt {
 					pos: spos.extend(p.tok.pos())
 				}
 			} else if p.peek_tok.kind == .name {
-				return p.error_with_pos('unexpected name `$p.tok.lit`', p.tok.pos())
+				return p.unexpected(got: 'name `$p.tok.lit`')
 			} else if !p.inside_if_expr && !p.inside_match_body && !p.inside_or_expr
 				&& p.peek_tok.kind in [.rcbr, .eof] && !p.mark_var_as_used(p.tok.lit) {
 				return p.error_with_pos('`$p.tok.lit` evaluated but not used', p.tok.pos())
@@ -936,7 +977,7 @@ pub fn (mut p Parser) stmt(is_top_level bool) ast.Stmt {
 					}
 				}
 				else {
-					return p.error_with_pos('unexpected \$', p.tok.pos())
+					return p.unexpected(got: '\$')
 				}
 			}
 		}
@@ -1682,7 +1723,7 @@ fn (mut p Parser) attributes() {
 				p.next()
 				break
 			}
-			p.error('unexpected $p.tok, expecting `;`')
+			p.unexpected(expecting: '`;`')
 			return
 		}
 		p.next()
@@ -1754,7 +1795,7 @@ fn (mut p Parser) parse_attr() ast.Attr {
 				arg = p.tok.kind.str()
 				p.next()
 			} else {
-				p.error('unexpected $p.tok, an argument is expected after `:`')
+				p.unexpected(additional_msg: 'an argument is expected after `:`')
 			}
 		}
 	}
@@ -2042,7 +2083,7 @@ pub fn (mut p Parser) parse_ident(language ast.Language) ast.Ident {
 		if is_mut || is_static || is_volatile {
 			p.error_with_pos('the `$modifier_kind` keyword is invalid here', mut_pos)
 		} else {
-			p.error('unexpected token `$p.tok.lit`')
+			p.unexpected(got: 'token `$p.tok.lit`')
 		}
 		return ast.Ident{
 			scope: p.scope
@@ -2408,7 +2449,9 @@ pub fn (mut p Parser) name_expr() ast.Expr {
 		} else {
 			// fn call
 			if is_optional {
-				p.error_with_pos('unexpected $p.prev_tok', p.prev_tok.pos())
+				p.unexpected_with_pos(p.prev_tok.pos(),
+					got: '$p.prev_tok'
+				)
 			}
 			node = p.call_expr(language, mod)
 			if p.tok.kind == .lpar && p.prev_tok.line_nr == p.tok.line_nr {
@@ -3136,12 +3179,16 @@ fn (mut p Parser) module_decl() ast.Module {
 		n_pos := p.tok.pos()
 		if module_pos.line_nr == n_pos.line_nr && p.tok.kind != .comment && p.tok.kind != .eof {
 			if p.tok.kind == .name {
-				p.error_with_pos('`module $name`, you can only declare one module, unexpected `$p.tok.lit`',
-					n_pos)
+				p.unexpected_with_pos(n_pos,
+					prepend_msg: '`module $name`, you can only declare one module,'
+					got: '`$p.tok.lit`'
+				)
 				return mod_node
 			} else {
-				p.error_with_pos('`module $name`, unexpected `$p.tok.kind` after module name',
-					n_pos)
+				p.unexpected_with_pos(n_pos,
+					prepend_msg: '`module $name`,'
+					got: '`$p.tok.kind` after module name'
+				)
 				return mod_node
 			}
 		}
@@ -3363,7 +3410,7 @@ fn (mut p Parser) const_decl() ast.ConstDecl {
 	for {
 		comments = p.eat_comments()
 		if is_block && p.tok.kind == .eof {
-			p.error('unexpected eof, expecting ´)´')
+			p.unexpected(got: 'eof', expecting: '´)´')
 			return ast.ConstDecl{}
 		}
 		if p.tok.kind == .rpar {
@@ -3387,7 +3434,7 @@ fn (mut p Parser) const_decl() ast.ConstDecl {
 			return ast.ConstDecl{}
 		}
 		if p.tok.kind == .eof {
-			p.error('unexpected eof, expecting an expression')
+			p.unexpected(got: 'eof', expecting: 'an expression')
 			return ast.ConstDecl{}
 		}
 		expr := p.expr(0)
@@ -3485,7 +3532,7 @@ fn (mut p Parser) global_decl() ast.GlobalDecl {
 			p.next()
 		}
 		if is_block && p.tok.kind == .eof {
-			p.error('unexpected eof, expecting `)`')
+			p.unexpected(got: 'eof', expecting: '`)`')
 			return ast.GlobalDecl{}
 		}
 		if p.tok.kind == .rpar {
