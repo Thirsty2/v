@@ -17,26 +17,105 @@ fn (mut g Gen) need_tmp_var_in_if(node ast.IfExpr) bool {
 			if branch.stmts.len == 1 {
 				if branch.stmts[0] is ast.ExprStmt {
 					stmt := branch.stmts[0] as ast.ExprStmt
-					if is_noreturn_callexpr(stmt.expr) {
+					if g.need_tmp_var_in_expr(stmt.expr) {
 						return true
-					}
-					if stmt.expr is ast.MatchExpr {
-						return true
-					}
-					if stmt.expr is ast.CallExpr {
-						if stmt.expr.is_method {
-							left_sym := g.table.sym(stmt.expr.receiver_type)
-							if left_sym.kind in [.array, .array_fixed, .map] {
-								return true
-							}
-						}
-						if stmt.expr.or_block.kind != .absent {
-							return true
-						}
 					}
 				}
 			}
 		}
+	}
+	return false
+}
+
+fn (mut g Gen) need_tmp_var_in_expr(expr ast.Expr) bool {
+	if is_noreturn_callexpr(expr) {
+		return true
+	}
+	match expr {
+		ast.IfExpr {
+			if g.need_tmp_var_in_if(expr) {
+				return true
+			}
+		}
+		ast.MatchExpr {
+			return true
+		}
+		ast.CallExpr {
+			if expr.is_method {
+				left_sym := g.table.sym(expr.receiver_type)
+				if left_sym.kind in [.array, .array_fixed, .map] {
+					return true
+				}
+			}
+			if expr.or_block.kind != .absent {
+				return true
+			}
+		}
+		ast.CastExpr {
+			return g.need_tmp_var_in_expr(expr.expr)
+		}
+		ast.ParExpr {
+			return g.need_tmp_var_in_expr(expr.expr)
+		}
+		ast.ConcatExpr {
+			for val in expr.vals {
+				if val is ast.CallExpr {
+					if val.return_type.has_flag(.optional) {
+						return true
+					}
+				}
+			}
+		}
+		ast.IndexExpr {
+			if expr.or_expr.kind != .absent {
+				return true
+			}
+			if g.need_tmp_var_in_expr(expr.index) {
+				return true
+			}
+		}
+		ast.ArrayInit {
+			if g.need_tmp_var_in_expr(expr.len_expr) {
+				return true
+			}
+			if g.need_tmp_var_in_expr(expr.cap_expr) {
+				return true
+			}
+			if g.need_tmp_var_in_expr(expr.default_expr) {
+				return true
+			}
+			for elem_expr in expr.exprs {
+				if g.need_tmp_var_in_expr(elem_expr) {
+					return true
+				}
+			}
+		}
+		ast.MapInit {
+			for key in expr.keys {
+				if g.need_tmp_var_in_expr(key) {
+					return true
+				}
+			}
+			for val in expr.vals {
+				if g.need_tmp_var_in_expr(val) {
+					return true
+				}
+			}
+		}
+		ast.StructInit {
+			if g.need_tmp_var_in_expr(expr.update_expr) {
+				return true
+			}
+			for field in expr.fields {
+				if g.need_tmp_var_in_expr(field.expr) {
+					return true
+				}
+			}
+		}
+		ast.SelectorExpr {
+			return g.need_tmp_var_in_expr(expr.expr)
+		}
+		else {}
 	}
 	return false
 }
@@ -46,7 +125,7 @@ fn (mut g Gen) if_expr(node ast.IfExpr) {
 		g.comptime_if(node)
 		return
 	}
-	// For simpe if expressions we can use C's `?:`
+	// For simple if expressions we can use C's `?:`
 	// `if x > 0 { 1 } else { 2 }` => `(x > 0)? (1) : (2)`
 	// For if expressions with multiple statements or another if expression inside, it's much
 	// easier to use a temp var, than do C tricks with commas, introduce special vars etc

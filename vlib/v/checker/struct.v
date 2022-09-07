@@ -3,6 +3,7 @@
 module checker
 
 import v.ast
+import v.util
 
 pub fn (mut c Checker) struct_decl(mut node ast.StructDecl) {
 	mut struct_sym, struct_typ_idx := c.table.find_sym_and_type_idx(node.name)
@@ -67,23 +68,22 @@ pub fn (mut c Checker) struct_decl(mut node ast.StructDecl) {
 							field.type_pos)
 					}
 				}
-				field_sym := c.table.sym(field.typ)
-				if field_sym.kind == .function {
-					fn_info := field_sym.info as ast.FnType
-					c.ensure_type_exists(fn_info.func.return_type, fn_info.func.return_type_pos) or {
-						return
-					}
-					for param in fn_info.func.params {
-						c.ensure_type_exists(param.typ, param.type_pos) or { return }
-					}
-				}
 			}
 			if sym.kind == .struct_ {
 				info := sym.info as ast.Struct
 				if info.is_heap && !field.typ.is_ptr() {
 					struct_sym.info.is_heap = true
 				}
+				if info.generic_types.len > 0 && !field.typ.has_flag(.generic)
+					&& info.concrete_types.len == 0 {
+					c.error('field `$field.name` type is generic struct, must specify the generic type names, e.g. Foo<T>, Foo<int>',
+						field.type_pos)
+				}
 			}
+			if sym.kind == .multi_return {
+				c.error('cannot use multi return as field type', field.type_pos)
+			}
+
 			if field.has_default_expr {
 				c.expected_type = field.typ
 				default_expr_type := c.expr(field.default_expr)
@@ -387,7 +387,8 @@ pub fn (mut c Checker) struct_init(mut node ast.StructInit) ast.Type {
 						ast.StructField{}
 					}
 					if !exists {
-						c.error('unknown field `$field.name` in struct literal of type `$type_sym.name`',
+						existing_fields := c.table.struct_fields(type_sym).map(it.name)
+						c.error(util.new_suggestion(field.name, existing_fields).say('unknown field `$field.name` in struct literal of type `$type_sym.name`'),
 							field.pos)
 						continue
 					}
@@ -556,11 +557,6 @@ pub fn (mut c Checker) struct_init(mut node ast.StructInit) ast.Type {
 				c.error('struct `$from_sym.name` is not compatible with struct `$to_sym.name`',
 					node.update_expr.pos())
 			}
-		}
-		if !node.update_expr.is_lvalue() {
-			// cgen will repeat `update_expr` for each field
-			// so enforce an lvalue for efficiency
-			c.error('expression is not an lvalue', node.update_expr.pos())
 		}
 	}
 	return node.typ

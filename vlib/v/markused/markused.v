@@ -204,7 +204,7 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []&ast.F
 			all_fn_root_names << k
 			continue
 		}
-		if mfn.receiver.typ != ast.void_type && mfn.receiver.typ.has_flag(.generic) {
+		if mfn.receiver.typ != ast.void_type && mfn.generic_names.len > 0 {
 			// generic methods may be used in cgen after specialisation :-|
 			// TODO: move generic method specialisation from cgen to before markused
 			all_fn_root_names << k
@@ -244,6 +244,7 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []&ast.F
 		all_fn_root_names << 'panic_debug'
 	}
 	all_fn_root_names << 'panic_optional_not_set'
+	all_fn_root_names << 'panic_result_not_set'
 	if pref.is_test {
 		all_fn_root_names << 'main.cb_assertion_ok'
 		all_fn_root_names << 'main.cb_assertion_failed'

@@ -68,6 +68,7 @@ It is easy, and it takes only a few seconds:
     * [Variable number of arguments](#variable-number-of-arguments)
     * [Anonymous & higher-order functions](#anonymous--higher-order-functions)
     * [Closures](#closures)
+    * [Parameter evaluation order](#parameter-evaluation-order)
 * [References](#references)
 * [Constants](#constants)
 * [Builtin functions](#builtin-functions)
@@ -2526,6 +2527,23 @@ struct Node<T> {
 ```
 
 To dereference a reference, use the `*` operator, just like in C.
+
+### Parameter evaluation order
+
+The evaluation order of the parameters of function calls is *NOT* guaranteed.
+Take for example the following program:
+```v
+fn f(a1 int, a2 int, a3 int) {
+	dump(a1 + a2 + a3)
+}
+
+fn main() {
+	f(dump(100), dump(200), dump(300))
+}
+```
+V currently does not guarantee, that it will print 100, 200, 300 in that order.
+The only guarantee is that 600 (from the body of `f`), will be printed after all of them.
+That *may* change in V 1.0 .
 
 ## Constants
 
@@ -5359,7 +5377,8 @@ fn main() {
 
 If you want an `if` to be evaluated at compile time it must be prefixed with a `$` sign.
 Right now it can be used to detect an OS, compiler, platform or compilation options.
-`$if debug` is a special option like `$if windows` or `$if x32`.
+`$if debug` is a special option like `$if windows` or `$if x32`, it's enabled if the program
+is compiled with `v -g` or `v -cg`.
 If you're using a custom ifdef, then you do need `$if option ? {}` and compile with`v -d option`.
 Full list of builtin options:
 | OS                            | Compilers         | Platforms             | Other                     |
@@ -5561,8 +5580,9 @@ that are substituted at compile time:
 - `@METHOD` => replaced with ReceiverType.MethodName
 - `@MOD` => replaced with the name of the current V module
 - `@STRUCT` => replaced with the name of the current V struct
-- `@FILE` => replaced with the path of the V source file
+- `@FILE` => replaced with the absolute path of the V source file
 - `@LINE` => replaced with the V line number where it appears (as a string).
+- `@FILE_LINE` => like `@FILE:@LINE`, but the file part is a relative path
 - `@COLUMN` => replaced with the column where it appears (as a string).
 - `@VEXE` => replaced with the path to the V compiler
 - `@VEXEROOT`  => will be substituted with the *folder*,

@@ -28,9 +28,7 @@ fn (mut g Gen) need_tmp_var_in_match(node ast.MatchExpr) bool {
 			if branch.stmts.len == 1 {
 				if branch.stmts[0] is ast.ExprStmt {
 					stmt := branch.stmts[0] as ast.ExprStmt
-					if stmt.expr in [ast.CallExpr, ast.IfExpr, ast.MatchExpr]
-						|| (stmt.expr is ast.IndexExpr
-						&& (stmt.expr as ast.IndexExpr).or_expr.kind != .absent) {
+					if g.need_tmp_var_in_expr(stmt.expr) {
 						return true
 					}
 				}
@@ -172,7 +170,11 @@ fn (mut g Gen) match_expr_sumtype(node ast.MatchExpr, is_expr bool, cond_var str
 				be := unsafe { &branch.exprs[sumtype_index] }
 				if sym.kind == .sum_type {
 					g.write('${dot_or_ptr}_typ == ')
-					g.expr(be)
+					if be is ast.None {
+						g.write('$ast.none_type.idx() /* none */')
+					} else {
+						g.expr(be)
+					}
 				} else if sym.kind == .interface_ {
 					if be is ast.TypeNode {
 						typ := be as ast.TypeNode

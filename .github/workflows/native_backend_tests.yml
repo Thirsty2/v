@@ -24,6 +24,7 @@ on:
   pull_request:
     paths-ignore:
       - '!**'
+      - '**.md'
       - 'vlib/v/gen/native/'
       - 'cmd/tools/builders/**.v'
       - 'vlib/builtin/**.v'
@@ -42,6 +43,10 @@ on:
       - 'vlib/v/gen/native/**.v'
       - 'vlib/v/gen/native/tests/**.v'
 
+concurrency:
+  group: native-backend-ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   native-backend:
     strategy:
@@ -54,6 +59,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
+
+      - name: Install linker
+        if: ${{ startsWith(matrix.os, 'ubuntu')}}
+        run: |
+          sudo apt-get install --quiet -y binutils
 
       - name: Build V with make.bat
         if: ${{ startsWith(matrix.os, 'windows') }}

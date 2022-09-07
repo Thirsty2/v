@@ -130,11 +130,11 @@ fn test_read_eof_last_read_partial_buffer_fill() ? {
 	f = os.open_file(tfile, 'r')?
 	mut br := []u8{len: 100}
 	// Read first 100 bytes of 199 byte file, should fill buffer with no error.
-	n0 := f.read(mut br)?
+	n0 := f.read(mut br) or { return error('failed to read 100 bytes') }
 	assert n0 == 100
 	// Read remaining 99 bytes of 199 byte file, should fill buffer with no
 	// error, even though end-of-file was reached.
-	n1 := f.read(mut br)?
+	n1 := f.read(mut br) or { return error('failed to read 100 bytes') }
 	assert n1 == 99
 	// Read again, end-of-file was previously reached so should return none
 	// error.
@@ -143,8 +143,8 @@ fn test_read_eof_last_read_partial_buffer_fill() ? {
 		// not return a number of bytes read when end-of-file is reached.
 		assert false
 	} else {
-		// Expect none to have been returned when end-of-file.
-		assert err is none
+		// Expected an error when received end-of-file.
+		assert err !is none
 	}
 	f.close()
 }
@@ -162,11 +162,11 @@ fn test_read_eof_last_read_full_buffer_fill() ? {
 	f = os.open_file(tfile, 'r')?
 	mut br := []u8{len: 100}
 	// Read first 100 bytes of 200 byte file, should fill buffer with no error.
-	n0 := f.read(mut br)?
+	n0 := f.read(mut br) or { return error('failed to read 100 bytes') }
 	assert n0 == 100
 	// Read remaining 100 bytes of 200 byte file, should fill buffer with no
 	// error. The end-of-file isn't reached yet, but there is no more data.
-	n1 := f.read(mut br)?
+	n1 := f.read(mut br) or { return error('failed to read 100 bytes') }
 	assert n1 == 100
 	// Read again, end-of-file was previously reached so should return none
 	// error.
@@ -175,8 +175,8 @@ fn test_read_eof_last_read_full_buffer_fill() ? {
 		// not return a number of bytes read when end-of-file is reached.
 		assert false
 	} else {
-		// Expect none to have been returned when end-of-file.
-		assert err is none
+		// Expect an error at EOF.
+		assert err !is none
 	}
 	f.close()
 }
@@ -388,7 +388,7 @@ fn test_reopen() ? {
 	f2.reopen(tfile1, 'r')?
 	assert !f2.eof()
 
-	z := f2.read(mut line_buffer)?
+	z := f2.read(mut line_buffer) or { panic(err) }
 	assert f2.eof()
 	assert z > 0
 	content := line_buffer#[..z].bytestr()
@@ -405,4 +405,17 @@ fn test_eof() ? {
 	assert !f.eof()
 	f.read_bytes(100)
 	assert f.eof()
+}
+
+fn test_open_file_wb_ab() ? {
+	os.rm(tfile) or {}
+	mut wfile := os.open_file('text.txt', 'wb', 0o666)?
+	wfile.write_string('hello')?
+	wfile.close()
+	assert os.read_file('text.txt')? == 'hello'
+	//
+	mut afile := os.open_file('text.txt', 'ab', 0o666)?
+	afile.write_string('hello')?
+	afile.close()
+	assert os.read_file('text.txt')? == 'hellohello'
 }

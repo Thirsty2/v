@@ -1,5 +1,24 @@
 module os
 
+/// Eof error means that we reach the end of the file.
+pub struct Eof {
+	Error
+}
+
+// NotExpected is a generic error that means that we receave a not expecte error.
+pub struct NotExpected {
+	cause string
+	code  int
+}
+
+fn (err NotExpected) msg() string {
+	return err.cause
+}
+
+fn (err NotExpected) code() int {
+	return err.code
+}
+
 pub struct File {
 mut:
 	cfile voidptr // Using void* instead of FILE*
@@ -35,27 +54,40 @@ fn fix_windows_path(path string) string {
 // open_file can be used to open or create a file with custom flags and permissions and returns a `File` object.
 pub fn open_file(path string, mode string, options ...int) ?File {
 	mut flags := 0
+	mut seek_to_end := false
 	for m in mode {
 		match m {
-			`w` { flags |= o_create | o_trunc }
-			`a` { flags |= o_create | o_append }
-			`r` { flags |= o_rdonly }
-			`b` { flags |= o_binary }
-			`s` { flags |= o_sync }
-			`n` { flags |= o_nonblock }
-			`c` { flags |= o_noctty }
-			`+` { flags |= o_rdwr }
+			`w` {
+				flags |= o_create | o_trunc | o_wronly
+			}
+			`a` {
+				flags |= o_create | o_append | o_wronly
+				seek_to_end = true
+			}
+			`r` {
+				flags |= o_rdonly
+			}
+			`b` {
+				flags |= o_binary
+			}
+			`s` {
+				flags |= o_sync
+			}
+			`n` {
+				flags |= o_nonblock
+			}
+			`c` {
+				flags |= o_noctty
+			}
+			`+` {
+				flags &= ~o_wronly
+				flags |= o_rdwr
+			}
 			else {}
 		}
 	}
 	if mode == 'r+' {
 		flags = o_rdwr
-	}
-	if mode == 'w' {
-		flags = o_wronly | o_create | o_trunc
-	}
-	if mode == 'a' {
-		flags = o_wronly | o_create | o_append
 	}
 	mut permission := 0o666
 	if options.len > 0 {
@@ -73,9 +105,18 @@ pub fn open_file(path string, mode string, options ...int) ?File {
 	if fd == -1 {
 		return error(posix_get_error_msg(C.errno))
 	}
-	cfile := C.fdopen(fd, &char(mode.str))
+	fdopen_mode := mode.replace('b', '')
+	cfile := C.fdopen(fd, &char(fdopen_mode.str))
 	if isnil(cfile) {
 		return error('Failed to open or create file "$path"')
+	}
+	if seek_to_end {
+		// ensure appending will work, even on bsd/macos systems:
+		$if windows {
+			C._fseeki64(cfile, 0, C.SEEK_END)
+		} $else {
+			C.fseeko(cfile, 0, C.SEEK_END)
+		}
 	}
 	return File{
 		cfile: cfile
@@ -192,11 +233,16 @@ pub fn (mut f File) reopen(path string, mode string) ? {
 }
 
 // read implements the Reader interface.
-pub fn (f &File) read(mut buf []u8) ?int {
+pub fn (f &File) read(mut buf []u8) !int {
 	if buf.len == 0 {
-		return 0
+		return IError(Eof{})
 	}
-	nbytes := fread(buf.data, 1, buf.len, f.cfile)?
+	nbytes := fread(buf.data, 1, buf.len, f.cfile) or {
+		return IError(NotExpected{
+			cause: 'unexpected error from fread'
+			code: -1
+		})
+	}
 	return nbytes
 }
 
