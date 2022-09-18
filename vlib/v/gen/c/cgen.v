@@ -44,11 +44,11 @@ fn string_array_to_map(a []string) map[string]bool {
 }
 
 pub struct Gen {
-	pref                &pref.Preferences
+	pref                &pref.Preferences = unsafe { nil }
 	field_data_type     ast.Type // cache her to avoid map lookups
 	module_built        string
 	timers_should_print bool
-	table               &ast.Table
+	table               &ast.Table = unsafe { nil }
 mut:
 	out                       strings.Builder
 	cheaders                  strings.Builder
@@ -78,11 +78,11 @@ mut:
 	sql_buf                   strings.Builder // for writing exprs to args via `sqlite3_bind_int()` etc
 	global_const_defs         map[string]GlobalConstDef
 	sorted_global_const_names []string
-	file                      &ast.File
+	file                      &ast.File = unsafe { nil }
 	unique_file_path_hash     u64 // a hash of file.path, used for making auxilary fn generation unique (like `compare_xyz`)
-	fn_decl                   &ast.FnDecl // pointer to the FnDecl we are currently inside otherwise 0
+	fn_decl                   &ast.FnDecl = unsafe { nil } // pointer to the FnDecl we are currently inside otherwise 0
 	last_fn_c_name            string
-	tmp_count                 int  // counter for unique tmp vars (_tmp1, _tmp2 etc); resets at the start of each fn.
+	tmp_count                 int         // counter for unique tmp vars (_tmp1, _tmp2 etc); resets at the start of each fn.
 	tmp_count_af              int  // a separate tmp var counter for autofree fn calls
 	tmp_count_declarations    int  // counter for unique tmp names (_d1, _d2 etc); does NOT reset, used for C declarations
 	global_tmp_count          int  // like tmp_count but global and not resetted in each function
@@ -108,7 +108,7 @@ mut:
 	chan_push_optionals       map[string]string // types for `ch <- x or {...}`
 	mtxs                      string // array of mutexes if the `lock` has multiple variables
 	labeled_loops             map[string]&ast.Stmt
-	inner_loop                &ast.Stmt
+	inner_loop                &ast.Stmt = unsafe { nil }
 	shareds                   map[int]string // types with hidden mutex for which decl has been emitted
 	inside_ternary            int  // ?: comma separated statements on a single line
 	inside_map_postfix        bool // inside map++/-- postfix expr
@@ -116,7 +116,9 @@ mut:
 	inside_map_index          bool
 	inside_opt_data           bool
 	inside_if_optional        bool
+	inside_if_result          bool
 	inside_match_optional     bool
+	inside_match_result       bool
 	inside_vweb_tmpl          bool
 	inside_return             bool
 	inside_struct_init        bool
@@ -206,7 +208,7 @@ mut:
 	// main_fn_decl_node  ast.FnDecl
 	cur_mod                ast.Module
 	cur_concrete_types     []ast.Type  // do not use table.cur_concrete_types because table is global, so should not be accessed by different threads
-	cur_fn                 &ast.FnDecl = unsafe { 0 } // same here
+	cur_fn                 &ast.FnDecl = unsafe { nil } // same here
 	cur_lock               ast.LockExpr
 	autofree_methods       map[int]bool
 	generated_free_methods map[int]bool
@@ -1296,7 +1298,7 @@ static inline void __${sym.cname}_pushval($sym.cname ch, $el_stype val) {
 		}
 	}
 	for sym in g.table.type_symbols {
-		if sym.kind == .alias && sym.name !in c.builtins {
+		if sym.kind == .alias && sym.name !in c.builtins && sym.name !in ['byte', 'i32'] {
 			g.write_alias_typesymbol_declaration(sym)
 		}
 	}
@@ -1587,9 +1589,46 @@ fn (mut g Gen) stmts_with_tmp_var(stmts []ast.Stmt, tmp_var string) bool {
 								styp = 'f64'
 							}
 						}
-						g.write('opt_ok2(&($styp[]) { ')
-						g.stmt(stmt)
-						g.writeln(' }, ($c.option_name*)(&$tmp_var), sizeof($styp));')
+						if stmt.typ.has_flag(.optional) {
+							g.writeln('')
+							g.write('$tmp_var = ')
+							g.expr(stmt.expr)
+							g.writeln(';')
+						} else {
+							g.write('opt_ok2(&($styp[]) { ')
+							g.expr(stmt.expr)
+							g.writeln(' }, ($c.option_name*)(&$tmp_var), sizeof($styp));')
+						}
+					}
+				}
+			} else if g.inside_if_result || g.inside_match_result {
+				g.set_current_pos_as_last_stmt_pos()
+				g.skip_stmt_pos = true
+				if stmt is ast.ExprStmt {
+					if stmt.typ == ast.error_type_idx {
+						g.writeln('${tmp_var}.is_error = true;')
+						g.write('${tmp_var}.err = ')
+						g.expr(stmt.expr)
+						g.writeln(';')
+					} else {
+						mut styp := g.base_type(stmt.typ)
+						$if tinyc && x32 && windows {
+							if stmt.typ == ast.int_literal_type {
+								styp = 'int'
+							} else if stmt.typ == ast.float_literal_type {
+								styp = 'f64'
+							}
+						}
+						if stmt.typ.has_flag(.result) {
+							g.writeln('')
+							g.write('$tmp_var = ')
+							g.expr(stmt.expr)
+							g.writeln(';')
+						} else {
+							g.write('opt_ok2(&($styp[]) { ')
+							g.expr(stmt.expr)
+							g.writeln(' }, ($c.result_name*)(&$tmp_var), sizeof($styp));')
+						}
 					}
 				}
 			} else {
@@ -1609,7 +1648,8 @@ fn (mut g Gen) stmts_with_tmp_var(stmts []ast.Stmt, tmp_var string) bool {
 			}
 		} else {
 			g.stmt(stmt)
-			if (g.inside_if_optional || g.inside_match_optional) && stmt is ast.ExprStmt {
+			if (g.inside_if_optional || g.inside_if_result || g.inside_match_optional
+				|| g.inside_match_result) && stmt is ast.ExprStmt {
 				g.writeln(';')
 			}
 		}
@@ -1786,7 +1826,8 @@ fn (mut g Gen) stmt(node ast.Stmt) {
 			// }
 			old_is_void_expr_stmt := g.is_void_expr_stmt
 			g.is_void_expr_stmt = !node.is_expr
-			if node.typ != ast.void_type && g.expected_cast_type != 0 && node.expr !is ast.MatchExpr {
+			if node.typ != ast.void_type && g.expected_cast_type != 0
+				&& node.expr !in [ast.IfExpr, ast.MatchExpr] {
 				g.expr_with_cast(node.expr, node.typ, g.expected_cast_type)
 			} else {
 				g.expr(node.expr)
@@ -1796,7 +1837,8 @@ fn (mut g Gen) stmt(node ast.Stmt) {
 			// g.autofree_call_postgen()
 			// }
 			if g.inside_ternary == 0 && !g.inside_if_optional && !g.inside_match_optional
-				&& !node.is_expr && node.expr !is ast.IfExpr {
+				&& !g.inside_if_result && !g.inside_match_result && !node.is_expr
+				&& node.expr !is ast.IfExpr {
 				if node.expr is ast.MatchExpr {
 					g.writeln('')
 				} else {
@@ -2264,7 +2306,7 @@ fn (mut g Gen) expr_with_cast(expr ast.Expr, got_type_raw ast.Type, expected_typ
 			scope := g.file.scope.innermost(expr.pos().pos)
 			if expr is ast.Ident {
 				if v := scope.find_var(expr.name) {
-					if v.smartcasts.len > 0 {
+					if v.smartcasts.len > 0 && unwrapped_expected_type == v.orig_type {
 						is_already_sum_type = true
 					}
 				}
@@ -2695,7 +2737,7 @@ fn (mut g Gen) trace_autofree(line string) {
 
 // fn (mut g Gen) autofree_scope_vars2(scope &ast.Scope, end_pos int) {
 fn (mut g Gen) autofree_scope_vars2(scope &ast.Scope, start_pos int, end_pos int, line_nr int, free_parent_scopes bool, stop_pos int) {
-	if isnil(scope) {
+	if scope == unsafe { nil } {
 		return
 	}
 	for _, obj in scope.objects {
@@ -2751,8 +2793,8 @@ fn (mut g Gen) autofree_scope_vars2(scope &ast.Scope, start_pos int, end_pos int
 	// return
 	// }
 	// ```
-	// if !isnil(scope.parent) && line_nr > 0 {
-	if free_parent_scopes && !isnil(scope.parent) && !scope.detached_from_parent
+	// if scope.parent != unsafe { nil } && line_nr > 0 {
+	if free_parent_scopes && scope.parent != unsafe { nil } && !scope.detached_from_parent
 		&& (stop_pos == -1 || scope.parent.start_pos >= stop_pos) {
 		g.trace_autofree('// af parent scope:')
 		g.autofree_scope_vars2(scope.parent, start_pos, end_pos, line_nr, true, stop_pos)
@@ -4197,7 +4239,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 		ftyp := g.typ(node.types[0])
 		mut is_regular_option := ftyp == '_option'
 		if optional_none || is_regular_option || node.types[0] == ast.error_type_idx {
-			if !isnil(g.fn_decl) && g.fn_decl.is_test {
+			if g.fn_decl != unsafe { nil } && g.fn_decl.is_test {
 				test_error_var := g.new_tmp_var()
 				g.write('$ret_typ $test_error_var = ')
 				g.gen_optional_error(g.fn_decl.return_type, node.exprs[0])
@@ -4225,7 +4267,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 		ftyp := g.typ(node.types[0])
 		mut is_regular_result := ftyp == c.result_name
 		if is_regular_result || node.types[0] == ast.error_type_idx {
-			if !isnil(g.fn_decl) && g.fn_decl.is_test {
+			if g.fn_decl != unsafe { nil } && g.fn_decl.is_test {
 				test_error_var := g.new_tmp_var()
 				g.write('$ret_typ $test_error_var = ')
 				g.gen_result_error(g.fn_decl.return_type, node.exprs[0])
@@ -4561,6 +4603,20 @@ fn (mut g Gen) const_decl(node ast.ConstDecl) {
 					// "Simple" expressions are not going to need multiple statements,
 					// only the ones which are inited later, so it's safe to use expr_string
 					g.const_decl_simple_define(field.mod, field.name, g.expr_string(field_expr))
+				} else if field.expr is ast.CastExpr {
+					if field.expr.expr is ast.ArrayInit {
+						if field.expr.expr.is_fixed {
+							styp := g.typ(field.expr.typ)
+							val := g.expr_string(field.expr.expr)
+							g.global_const_defs[util.no_dots(field.name)] = GlobalConstDef{
+								mod: field.mod
+								def: '$styp $const_name = $val; // fixed array const'
+								dep_names: g.table.dependent_names_in_expr(field_expr)
+							}
+							continue
+						}
+					}
+					g.const_decl_init_later(field.mod, name, field.expr, field.typ, false)
 				} else {
 					g.const_decl_init_later(field.mod, name, field.expr, field.typ, false)
 				}
@@ -5348,7 +5404,7 @@ fn (mut g Gen) or_block(var_name string, or_block ast.OrExpr, return_type ast.Ty
 		g.or_expr_return_type = ast.void_type
 	} else if or_block.kind == .propagate_result
 		|| (or_block.kind == .propagate_option && return_type.has_flag(.result)) {
-		if g.file.mod.name == 'main' && (isnil(g.fn_decl) || g.fn_decl.is_main) {
+		if g.file.mod.name == 'main' && (g.fn_decl == unsafe { nil } || g.fn_decl.is_main) {
 			// In main(), an `opt()!` call is sugar for `opt() or { panic(err) }`
 			err_msg := 'IError_name_table[${cvar_name}.err._typ]._method_msg(${cvar_name}.err._object)'
 			if g.pref.is_debug {
@@ -5357,7 +5413,7 @@ fn (mut g Gen) or_block(var_name string, or_block ast.OrExpr, return_type ast.Ty
 			} else {
 				g.writeln('\tpanic_result_not_set($err_msg);')
 			}
-		} else if !isnil(g.fn_decl) && g.fn_decl.is_test {
+		} else if g.fn_decl != unsafe { nil } && g.fn_decl.is_test {
 			g.gen_failing_error_propagation_for_test_fn(or_block, cvar_name)
 		} else {
 			// In ordinary functions, `opt()!` call is sugar for:
@@ -5377,7 +5433,7 @@ fn (mut g Gen) or_block(var_name string, or_block ast.OrExpr, return_type ast.Ty
 			}
 		}
 	} else if or_block.kind == .propagate_option {
-		if g.file.mod.name == 'main' && (isnil(g.fn_decl) || g.fn_decl.is_main) {
+		if g.file.mod.name == 'main' && (g.fn_decl == unsafe { nil } || g.fn_decl.is_main) {
 			// In main(), an `opt()?` call is sugar for `opt() or { panic(err) }`
 			err_msg := 'IError_name_table[${cvar_name}.err._typ]._method_msg(${cvar_name}.err._object)'
 			if g.pref.is_debug {
@@ -5386,7 +5442,7 @@ fn (mut g Gen) or_block(var_name string, or_block ast.OrExpr, return_type ast.Ty
 			} else {
 				g.writeln('\tpanic_optional_not_set( $err_msg );')
 			}
-		} else if !isnil(g.fn_decl) && g.fn_decl.is_test {
+		} else if g.fn_decl != unsafe { nil } && g.fn_decl.is_test {
 			g.gen_failing_error_propagation_for_test_fn(or_block, cvar_name)
 		} else {
 			// In ordinary functions, `opt()?` call is sugar for:
@@ -6022,7 +6078,7 @@ static inline __shared__$interface_name ${shared_fn_name}(__shared__$cctype* x) 
 
 fn (mut g Gen) panic_debug_info(pos token.Pos) (int, string, string, string) {
 	paline := pos.line_nr + 1
-	if isnil(g.fn_decl) {
+	if g.fn_decl == unsafe { nil } {
 		return paline, '', 'main', 'C._vinit'
 	}
 	pafile := g.fn_decl.file.replace('\\', '/')
