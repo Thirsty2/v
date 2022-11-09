@@ -70,11 +70,12 @@ fn (mut g Gen) comptime_call(mut node ast.ComptimeCall) {
 		fn_name := g.fn_decl.name.replace('.', '__') + node.pos.pos.str()
 		if is_html {
 			// return vweb html template
-			g.writeln('vweb__Context_html(&app->Context, _tmpl_res_$fn_name); strings__Builder_free(&sb_$fn_name); string_free(&_tmpl_res_$fn_name);')
+			app_name := g.fn_decl.params[0].name
+			g.writeln('vweb__Context_html(&$app_name->Context, _tmpl_res_$fn_name); strings__Builder_free(&sb_$fn_name); string_free(&_tmpl_res_$fn_name);')
 		} else {
 			// return $tmpl string
 			g.write(cur_line)
-			if g.inside_return {
+			if g.inside_return_tmpl {
 				g.write('return ')
 			}
 			g.write('_tmpl_res_$fn_name')
@@ -97,7 +98,7 @@ fn (mut g Gen) comptime_call(mut node ast.ComptimeCall) {
 			g.error('method `${m.name}()` (no value) used as value', node.pos)
 		}
 		expand_strs := if node.args.len > 0 && m.params.len - 1 >= node.args.len {
-			arg := node.args[node.args.len - 1]
+			arg := node.args.last()
 			param := m.params[node.args.len]
 
 			arg.expr is ast.Ident && g.table.type_to_str(arg.typ) == '[]string'
@@ -201,6 +202,9 @@ fn cgen_attrs(attrs []ast.Attr) []string {
 		if attr.arg.len > 0 {
 			s += ': $attr.arg'
 		}
+		if attr.kind == .string {
+			s = escape_quotes(s)
+		}
 		res << '_SLIT("$s")'
 	}
 	return res
@@ -265,7 +269,12 @@ fn (mut g Gen) comptime_if(node ast.IfExpr) {
 			g.writeln('')
 		}
 		expr_str := g.out.last_n(g.out.len - start_pos).trim_space()
-		g.defer_ifdef = expr_str
+		if expr_str != '' {
+			if g.defer_ifdef != '' {
+				g.defer_ifdef += '\r\n' + '\t'.repeat(g.indent + 1)
+			}
+			g.defer_ifdef += expr_str
+		}
 		if node.is_expr {
 			len := branch.stmts.len
 			if len > 0 {
@@ -302,8 +311,8 @@ fn (mut g Gen) comptime_if(node ast.IfExpr) {
 				g.writeln('}')
 			}
 		}
-		g.defer_ifdef = ''
 	}
+	g.defer_ifdef = ''
 	g.writeln('#endif')
 	if node.is_expr {
 		g.write('$line $tmp_var')
@@ -461,12 +470,20 @@ fn (mut g Gen) comptime_for(node ast.ComptimeFor) {
 		if methods.len > 0 {
 			g.writeln('FunctionData $node.val_var = {0};')
 		}
-		for method in methods { // sym.methods {
-			/*
-			if method.return_type != vweb_result_type { // ast.void_type {
-				continue
+		typ_vweb_result := g.table.find_type_idx('vweb.Result')
+		for method in methods {
+			// filter vweb route methods (non-generic method)
+			if method.receiver_type != 0 && method.return_type == typ_vweb_result {
+				rec_sym := g.table.sym(method.receiver_type)
+				if rec_sym.kind == .struct_ {
+					if _ := g.table.find_field_with_embeds(rec_sym, 'Context') {
+						if method.generic_names.len > 0
+							|| (method.params.len > 1 && method.attrs.len == 0) {
+							continue
+						}
+					}
+				}
 			}
-			*/
 			g.comptime_for_method = method.name
 			g.writeln('/* method $i */ {')
 			g.writeln('\t${node.val_var}.name = _SLIT("$method.name");')
@@ -495,20 +512,23 @@ fn (mut g Gen) comptime_for(node ast.ComptimeFor) {
 				}
 				g.writeln('}));\n')
 			}
-			mut sig := 'anon_fn_'
+			mut sig := 'fn ('
 			// skip the first (receiver) arg
 			for j, arg in method.params[1..] {
 				// TODO: ignore mut/pts in sig for now
 				typ := arg.typ.set_nr_muls(0)
-				sig += '$typ'
+				sig += g.table.sym(typ).name
 				if j < method.params.len - 2 {
-					sig += '_'
+					sig += ', '
 				}
 			}
-			sig += '_$method.return_type'
+			sig += ')'
+			ret_type := g.table.sym(method.return_type).name
+			if ret_type != 'void' {
+				sig += ' $ret_type'
+			}
 			styp := g.table.find_type_idx(sig)
-			// println(styp)
-			// if styp == 0 { }
+
 			// TODO: type aliases
 			ret_typ := method.return_type.idx()
 			g.writeln('\t${node.val_var}.typ = $styp;')
@@ -655,6 +675,9 @@ fn (mut g Gen) comptime_if_to_ifdef(name string, is_comptime_optional bool) ?str
 		//
 		'js' {
 			return '_VJS'
+		}
+		'wasm32_emscripten' {
+			return '__EMSCRIPTEN__'
 		}
 		// compilers:
 		'gcc' {

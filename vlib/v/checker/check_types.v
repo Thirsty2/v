@@ -19,7 +19,7 @@ pub fn (mut c Checker) check_types(got ast.Type, expected ast.Type) bool {
 		if expected == ast.byteptr_type {
 			return true
 		}
-		if expected == ast.voidptr_type {
+		if expected == ast.voidptr_type || expected == ast.nil_type {
 			return true
 		}
 		if (expected == ast.bool_type && (got.is_any_kind_of_pointer() || got.is_int()))
@@ -112,7 +112,8 @@ pub fn (mut c Checker) check_types(got ast.Type, expected ast.Type) bool {
 	if exp_idx == got_idx {
 		return true
 	}
-	if exp_idx == ast.voidptr_type_idx || exp_idx == ast.byteptr_type_idx
+	if exp_idx == ast.voidptr_type_idx || exp_idx == ast.nil_type_idx
+		|| exp_idx == ast.byteptr_type_idx
 		|| (expected.is_ptr() && expected.deref().idx() == ast.u8_type_idx) {
 		if got.is_ptr() || got.is_pointer() {
 			return true
@@ -125,7 +126,8 @@ pub fn (mut c Checker) check_types(got ast.Type, expected ast.Type) bool {
 			return true
 		}
 	}
-	if got_idx == ast.voidptr_type_idx || got_idx == ast.byteptr_type_idx
+	if got_idx == ast.voidptr_type_idx || got_idx == ast.nil_type_idx
+		|| got_idx == ast.byteptr_type_idx
 		|| (got_idx == ast.u8_type_idx && got.is_ptr()) {
 		if expected.is_ptr() || expected.is_pointer() {
 			return true
@@ -162,6 +164,22 @@ pub fn (mut c Checker) check_types(got ast.Type, expected ast.Type) bool {
 	}
 	if expected.has_flag(.generic) {
 		return false
+	}
+	return true
+}
+
+fn (c Checker) check_multiple_ptr_match(got ast.Type, expected ast.Type, param ast.Param, arg ast.CallArg) bool {
+	param_nr_muls := if param.is_mut && !expected.is_ptr() { 1 } else { expected.nr_muls() }
+	if got.is_ptr() && got.nr_muls() > 1 && got.nr_muls() != param_nr_muls {
+		if arg.expr is ast.PrefixExpr && (arg.expr as ast.PrefixExpr).op == .amp {
+			return false
+		}
+		if arg.expr is ast.UnsafeExpr {
+			expr := (arg.expr as ast.UnsafeExpr).expr
+			if expr is ast.PrefixExpr && (expr as ast.PrefixExpr).op == .amp {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -379,13 +397,18 @@ pub fn (mut c Checker) check_matching_function_symbols(got_type_sym &ast.TypeSym
 	if got_fn.return_type.has_flag(.optional) != exp_fn.return_type.has_flag(.optional) {
 		return false
 	}
+	if got_fn.return_type.has_flag(.result) != exp_fn.return_type.has_flag(.result) {
+		return false
+	}
 	if !c.check_basic(got_fn.return_type, exp_fn.return_type) {
 		return false
 	}
 	for i, got_arg in got_fn.params {
 		exp_arg := exp_fn.params[i]
-		exp_arg_is_ptr := exp_arg.typ.is_ptr() || exp_arg.typ.is_pointer()
-		got_arg_is_ptr := got_arg.typ.is_ptr() || got_arg.typ.is_pointer()
+		exp_arg_typ := c.unwrap_generic(exp_arg.typ)
+		got_arg_typ := c.unwrap_generic(got_arg.typ)
+		exp_arg_is_ptr := exp_arg_typ.is_ptr() || exp_arg_typ.is_pointer()
+		got_arg_is_ptr := got_arg_typ.is_ptr() || got_arg_typ.is_pointer()
 		if exp_arg_is_ptr != got_arg_is_ptr {
 			exp_arg_pointedness := if exp_arg_is_ptr { 'a pointer' } else { 'NOT a pointer' }
 			got_arg_pointedness := if got_arg_is_ptr { 'a pointer' } else { 'NOT a pointer' }
@@ -397,9 +420,11 @@ pub fn (mut c Checker) check_matching_function_symbols(got_type_sym &ast.TypeSym
 			}
 			return false
 		} else if exp_arg_is_ptr && got_arg_is_ptr {
-			continue
+			if exp_arg_typ.is_pointer() || got_arg_typ.is_pointer() {
+				continue
+			}
 		}
-		if got_arg.typ != exp_arg.typ {
+		if c.table.unaliased_type(got_arg_typ).idx() != c.table.unaliased_type(exp_arg_typ).idx() {
 			return false
 		}
 	}
@@ -595,7 +620,7 @@ fn (c &Checker) promote_num(left_type ast.Type, right_type ast.Type) ast.Type {
 	}
 }
 
-pub fn (mut c Checker) check_expected(got ast.Type, expected ast.Type) ? {
+pub fn (mut c Checker) check_expected(got ast.Type, expected ast.Type) ! {
 	if !c.check_types(got, expected) {
 		return error(c.expected_msg(got, expected))
 	}
@@ -651,7 +676,8 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 				} else {
 					match sym.info {
 						ast.Struct, ast.Interface, ast.SumType {
-							if !isnil(c.table.cur_fn) && c.table.cur_fn.generic_names.len > 0 { // in generic fn
+							if c.table.cur_fn != unsafe { nil }
+								&& c.table.cur_fn.generic_names.len > 0 { // in generic fn
 								if gt_name in c.table.cur_fn.generic_names
 									&& c.table.cur_fn.generic_names.len == c.table.cur_concrete_types.len {
 									idx := c.table.cur_fn.generic_names.index(gt_name)
@@ -704,7 +730,7 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 					mut param_elem_sym := c.table.sym(param_elem_info.elem_type)
 					for {
 						if arg_elem_sym.kind == .array && param_elem_sym.kind == .array
-							&& !isnil(c.table.cur_fn)
+							&& c.table.cur_fn != unsafe { nil }
 							&& param_elem_sym.name !in c.table.cur_fn.generic_names {
 							arg_elem_info = arg_elem_sym.info as ast.Array
 							arg_elem_sym = c.table.sym(arg_elem_info.elem_type)
@@ -713,6 +739,9 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 						} else {
 							if param_elem_sym.name == gt_name {
 								typ = arg_elem_info.elem_type
+								if param_elem_info.elem_type.nr_muls() > 0 && typ.nr_muls() > 0 {
+									typ = typ.set_nr_muls(0)
+								}
 							}
 							break
 						}
@@ -724,7 +753,7 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 					mut param_elem_sym := c.table.sym(param_elem_info.elem_type)
 					for {
 						if arg_elem_sym.kind == .array_fixed && param_elem_sym.kind == .array_fixed
-							&& !isnil(c.table.cur_fn)
+							&& c.table.cur_fn != unsafe { nil }
 							&& param_elem_sym.name !in c.table.cur_fn.generic_names {
 							arg_elem_info = arg_elem_sym.info as ast.ArrayFixed
 							arg_elem_sym = c.table.sym(arg_elem_info.elem_type)
@@ -733,6 +762,9 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 						} else {
 							if param_elem_sym.name == gt_name {
 								typ = arg_elem_info.elem_type
+								if param_elem_info.elem_type.nr_muls() > 0 && typ.nr_muls() > 0 {
+									typ = typ.set_nr_muls(0)
+								}
 							}
 							break
 						}
@@ -743,10 +775,16 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 					if param_map_info.key_type.has_flag(.generic)
 						&& c.table.sym(param_map_info.key_type).name == gt_name {
 						typ = arg_map_info.key_type
+						if param_map_info.key_type.nr_muls() > 0 && typ.nr_muls() > 0 {
+							typ = typ.set_nr_muls(0)
+						}
 					}
 					if param_map_info.value_type.has_flag(.generic)
 						&& c.table.sym(param_map_info.value_type).name == gt_name {
 						typ = arg_map_info.value_type
+						if param_map_info.value_type.nr_muls() > 0 && typ.nr_muls() > 0 {
+							typ = typ.set_nr_muls(0)
+						}
 					}
 				} else if arg_sym.kind == .function && param_type_sym.kind == .function {
 					arg_type_func := (arg_sym.info as ast.FnType).func
@@ -756,11 +794,17 @@ pub fn (mut c Checker) infer_fn_generic_types(func ast.Fn, mut node ast.CallExpr
 							if fn_param.typ.has_flag(.generic)
 								&& c.table.sym(fn_param.typ).name == gt_name {
 								typ = arg_type_func.params[n].typ
+								if fn_param.typ.nr_muls() > 0 && typ.nr_muls() > 0 {
+									typ = typ.set_nr_muls(0)
+								}
 							}
 						}
 						if param_type_func.return_type.has_flag(.generic)
 							&& c.table.sym(param_type_func.return_type).name == gt_name {
 							typ = arg_type_func.return_type
+							if param_type_func.return_type.nr_muls() > 0 && typ.nr_muls() > 0 {
+								typ = typ.set_nr_muls(0)
+							}
 						}
 					}
 				} else if arg_sym.kind in [.struct_, .interface_, .sum_type] {

@@ -499,7 +499,7 @@ pub fn (s string) replace_each(vals []string) string {
 // Example: assert '\tHello!'.replace_char(`\t`,` `,8) == '        Hello!'
 [direct_array_access]
 pub fn (s string) replace_char(rep u8, with u8, repeat int) string {
-	$if !no_bounds_checking ? {
+	$if !no_bounds_checking {
 		if repeat <= 0 {
 			panic('string.replace_char(): tab length too short')
 		}
@@ -624,7 +624,7 @@ pub fn (s string) u64() u64 {
 // This method directly exposes the `parse_int` function from `strconv`
 // as a method on `string`. For more advanced features,
 // consider calling `strconv.common_parse_int` directly.
-pub fn (s string) parse_uint(_base int, _bit_size int) ?u64 {
+pub fn (s string) parse_uint(_base int, _bit_size int) !u64 {
 	return strconv.parse_uint(s, _base, _bit_size)
 }
 
@@ -644,7 +644,7 @@ pub fn (s string) parse_uint(_base int, _bit_size int) ?u64 {
 // This method directly exposes the `parse_uint` function from `strconv`
 // as a method on `string`. For more advanced features,
 // consider calling `strconv.common_parse_uint` directly.
-pub fn (s string) parse_int(_base int, _bit_size int) ?i64 {
+pub fn (s string) parse_int(_base int, _bit_size int) !i64 {
 	return strconv.parse_int(s, _base, _bit_size)
 }
 
@@ -873,7 +873,7 @@ fn (s string) substr2(start int, _end int, end_max bool) string {
 // Example: assert 'ABCD'.substr(1,3) == 'BC'
 [direct_array_access]
 pub fn (s string) substr(start int, end int) string {
-	$if !no_bounds_checking ? {
+	$if !no_bounds_checking {
 		if start > end || start > s.len || end > s.len || start < 0 || end < 0 {
 			panic('substr($start, $end) out of bounds (len=$s.len)')
 		}
@@ -1413,11 +1413,18 @@ pub fn (s string) trim_space() string {
 
 // trim strips any of the characters given in `cutset` from the start and end of the string.
 // Example: assert ' ffHello V ffff'.trim(' f') == 'Hello V'
-[direct_array_access]
 pub fn (s string) trim(cutset string) string {
 	if s.len < 1 || cutset.len < 1 {
 		return s.clone()
 	}
+	left, right := s.trim_indexes(cutset)
+	return s.substr(left, right)
+}
+
+// trim_indexes gets the new start and end indicies of a string when any of the characters given in `cutset` were stripped from the start and end of the string. Should be used as an input to `substr()`. If the string contains only the characters in `cutset`, both values returned are zero.
+// Example: left, right := '-hi-'.trim_indexes('-')
+[direct_array_access]
+pub fn (s string) trim_indexes(cutset string) (int, int) {
 	mut pos_left := 0
 	mut pos_right := s.len - 1
 	mut cs_match := true
@@ -1438,10 +1445,10 @@ pub fn (s string) trim(cutset string) string {
 			}
 		}
 		if pos_left > pos_right {
-			return ''
+			return 0, 0
 		}
 	}
-	return s.substr(pos_left, pos_right + 1)
+	return pos_left, pos_right + 1
 }
 
 // trim_left strips any of the characters given in `cutset` from the left of the string.
@@ -1575,7 +1582,7 @@ pub fn (s string) str() string {
 // at returns the byte at index `idx`.
 // Example: assert 'ABC'.at(1) == u8(`B`)
 fn (s string) at(idx int) byte {
-	$if !no_bounds_checking ? {
+	$if !no_bounds_checking {
 		if idx < 0 || idx >= s.len {
 			panic('string index out of range: $idx / $s.len')
 		}
@@ -1818,6 +1825,7 @@ pub fn (s []string) join_lines() string {
 
 // reverse returns a reversed string.
 // Example: assert 'Hello V'.reverse() == 'V olleH'
+[direct_array_access]
 pub fn (s string) reverse() string {
 	if s.len == 0 || s.len == 1 {
 		return s.clone()
@@ -1870,6 +1878,7 @@ pub fn (s string) bytes() []u8 {
 }
 
 // repeat returns a new string with `count` number of copies of the string it was called on.
+[direct_array_access]
 pub fn (s string) repeat(count int) string {
 	if count < 0 {
 		panic('string.repeat: count is negative: $count')

@@ -35,7 +35,7 @@ mut:
 	// parser context in the worker processes:
 	table      ast.Table
 	scope      ast.Scope
-	pref       &pref.Preferences
+	pref       &pref.Preferences = unsafe { nil }
 	period_ms  int  // print periodic progress
 	stop_print bool // stop printing the periodic progress
 }
@@ -54,10 +54,10 @@ fn main() {
 		context.pref = &pref.Preferences{
 			output_mode: .silent
 		}
-		mut source := os.read_file(context.path)?
+		mut source := os.read_file(context.path)!
 		source = source[..context.cut_index]
 
-		go fn (ms int) {
+		spawn fn (ms int) {
 			time.sleep(ms * time.millisecond)
 			exit(ecode_timeout)
 		}(context.timeout_ms)
@@ -248,7 +248,7 @@ fn (mut context Context) start_printing() {
 	if !context.is_linear && !context.is_silent {
 		println('\n')
 	}
-	go context.print_periodic_status()
+	spawn context.print_periodic_status()
 }
 
 fn (mut context Context) stop_printing() {

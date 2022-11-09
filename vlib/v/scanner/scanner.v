@@ -37,6 +37,7 @@ pub mut:
 	is_inter_start              bool   // for hacky string interpolation TODO simplify
 	is_inter_end                bool
 	is_enclosed_inter           bool
+	is_inside_interpolation     bool // avoid nesting interpolation
 	line_comment                string
 	last_lt                     int = -1 // position of latest <
 	is_started                  bool
@@ -106,9 +107,9 @@ pub enum CommentsMode {
 }
 
 // new scanner from file.
-pub fn new_scanner_file(file_path string, comments_mode CommentsMode, pref &pref.Preferences) ?&Scanner {
+pub fn new_scanner_file(file_path string, comments_mode CommentsMode, pref &pref.Preferences) !&Scanner {
 	if !os.is_file(file_path) {
-		return error('$file_path is not a .v file')
+		return error('{file_path} is not a .v file')
 	}
 	raw_text := util.read_file(file_path) or { return err }
 	mut s := &Scanner{
@@ -286,7 +287,7 @@ fn (mut s Scanner) ident_bin_number() string {
 		s.error('number part of this binary is not provided')
 	} else if has_wrong_digit {
 		s.pos = first_wrong_digit_pos // adjust error position
-		s.error('this binary number has unsuitable digit `$first_wrong_digit.str()`')
+		s.error('this binary number has unsuitable digit `{first_wrong_digit.str()}`')
 	}
 	number := s.num_lit(start_pos, s.pos)
 	s.pos--
@@ -330,7 +331,7 @@ fn (mut s Scanner) ident_hex_number() string {
 		s.error('number part of this hexadecimal is not provided')
 	} else if has_wrong_digit {
 		s.pos = first_wrong_digit_pos // adjust error position
-		s.error('this hexadecimal number has unsuitable digit `$first_wrong_digit.str()`')
+		s.error('this hexadecimal number has unsuitable digit `{first_wrong_digit.str()}`')
 	}
 	number := s.num_lit(start_pos, s.pos)
 	s.pos--
@@ -370,7 +371,7 @@ fn (mut s Scanner) ident_oct_number() string {
 		s.error('number part of this octal is not provided')
 	} else if has_wrong_digit {
 		s.pos = first_wrong_digit_pos // adjust error position
-		s.error('this octal number has unsuitable digit `$first_wrong_digit.str()`')
+		s.error('this octal number has unsuitable digit `{first_wrong_digit.str()}`')
 	}
 	number := s.num_lit(start_pos, s.pos)
 	s.pos--
@@ -446,7 +447,7 @@ fn (mut s Scanner) ident_dec_number() string {
 					symbol_length++
 				}
 				float_symbol := s.text[s.pos - 2 - symbol_length..s.pos - 1]
-				s.warn('float literals should have a digit after the decimal point, e.g. `${float_symbol}.0`')
+				s.warn('float literals should have a digit after the decimal point, e.g. `{float_symbol}.0`')
 			}
 		}
 	}
@@ -480,7 +481,7 @@ fn (mut s Scanner) ident_dec_number() string {
 		// error check: wrong digit
 		s.pos = first_wrong_digit_pos // adjust error position
 		if !s.pref.translated {
-			s.error('this number has unsuitable digit `$first_wrong_digit.str()`')
+			s.error('this number has unsuitable digit `{first_wrong_digit.str()}`')
 		}
 	} else if s.text[s.pos - 1] in [`e`, `E`] {
 		// error check: 5e
@@ -543,7 +544,7 @@ fn (mut s Scanner) end_of_file() token.Token {
 	if s.eofs > 50 {
 		s.line_nr--
 		panic(
-			'the end of file `$s.file_path` has been reached 50 times already, the v parser is probably stuck.\n' +
+			'the end of file `{s.file_path}` has been reached 50 times already, the v parser is probably stuck.\n' +
 			'This should not happen. Please report the bug here, and include the last 2-3 lines of your source code:\n' +
 			'https://github.com/vlang/v/issues/new?labels=Bug&template=bug_report.md')
 	}
@@ -566,7 +567,7 @@ fn (mut s Scanner) scan_all_tokens_in_buffer() {
 	s.tidx = 0
 	$if debugscanner ? {
 		for t in s.all_tokens {
-			eprintln('> tidx:${t.tidx:-5} | kind: ${t.kind:-10} | lit: $t.lit')
+			eprintln('> tidx:{t.tidx:-5} | kind: {t.kind:-10} | lit: {t.lit}')
 		}
 	}
 }
@@ -668,7 +669,7 @@ fn (mut s Scanner) text_scan() token.Token {
 			kind := token.scanner_matcher.find(name)
 			// '$type' '$struct'... will be recognized as ident (not keyword token)
 			if kind != -1 && !(s.is_inter_start && next_char == s.quote) {
-				return s.new_token(token.Kind(kind), name, name.len)
+				return s.new_token(unsafe { token.Kind(kind) }, name, name.len)
 			}
 			// 'asdf $b' => "b" is the last name in the string, dont start parsing string
 			// at the next ', skip it
@@ -677,13 +678,14 @@ fn (mut s Scanner) text_scan() token.Token {
 					s.is_inter_end = true
 					s.is_inter_start = false
 					s.is_inside_string = false
+					s.is_inside_interpolation = false
 				}
 			}
 			// end of `$expr`
 			// allow `'$a.b'` and `'$a.c()'`
 			if s.is_inter_start && next_char == `\\`
 				&& s.look_ahead(2) !in [`x`, `n`, `r`, `\\`, `t`, `e`, `"`, `'`] {
-				s.warn('unknown escape sequence \\${s.look_ahead(2)}')
+				s.warn('unknown escape sequence \\{s.look_ahead(2)}')
 			}
 			if s.is_inter_start && next_char == `(` {
 				if s.look_ahead(2) != `)` {
@@ -692,6 +694,7 @@ fn (mut s Scanner) text_scan() token.Token {
 			} else if s.is_inter_start && next_char != `.` {
 				s.is_inter_end = true
 				s.is_inter_start = false
+				s.is_inside_interpolation = false
 			}
 			return s.new_token(.name, name, name.len)
 		} else if c.is_digit() || (c == `.` && nextc.is_digit()) {
@@ -720,6 +723,7 @@ fn (mut s Scanner) text_scan() token.Token {
 				s.is_inter_start = false
 				if next_char == s.quote {
 					s.is_inside_string = false
+					s.is_inside_interpolation = false
 				}
 				return s.new_token(.rpar, '', 1)
 			}
@@ -802,9 +806,17 @@ fn (mut s Scanner) text_scan() token.Token {
 				return s.new_token(.rsbr, '', 1)
 			}
 			`{` {
-				// Skip { in `${` in strings
 				if s.is_inside_string {
-					if s.text[s.pos - 1] == `$` {
+					prev_char := s.text[s.pos - 1]
+					next_char := s.text[s.pos + 1]
+					// Handle new `hello {name}` string interpolation
+					if !s.is_inside_interpolation && !next_char.is_space() && next_char != `}`
+						&& prev_char != `$` {
+						s.is_inside_interpolation = true
+						return s.new_token(.str_lcbr, '', 1)
+					}
+					if s.is_inside_interpolation && prev_char == `$` {
+						// Skip { in `${` in strings
 						continue
 					} else {
 						s.inter_cbr_count++
@@ -814,6 +826,7 @@ fn (mut s Scanner) text_scan() token.Token {
 			}
 			`$` {
 				if s.is_inside_string {
+					s.is_inside_interpolation = true
 					return s.new_token(.str_dollar, '', 1)
 				} else {
 					return s.new_token(.dollar, '', 1)
@@ -831,9 +844,11 @@ fn (mut s Scanner) text_scan() token.Token {
 					if s.text[s.pos] == s.quote {
 						s.is_inside_string = false
 						s.is_enclosed_inter = false
+						s.is_inside_interpolation = false
 						return s.new_token(.string, '', 1)
 					}
 					s.is_enclosed_inter = false
+					s.is_inside_interpolation = false
 					ident_string := s.ident_string()
 					return s.new_token(.string, ident_string, ident_string.len + 2) // + two quotes
 				} else {
@@ -886,7 +901,7 @@ fn (mut s Scanner) text_scan() token.Token {
 					mut at_error_msg := '@ must be used before keywords or compile time variables (e.g. `@type string` or `@FN`)'
 					// If name is all uppercase, the user is probably looking for a compile time variable ("at-token")
 					if name.is_upper() {
-						at_error_msg += '\nAvailable compile time variables:\n$token.valid_at_tokens'
+						at_error_msg += '\nAvailable compile time variables:\n{token.valid_at_tokens}'
 					}
 					s.error(at_error_msg)
 				}
@@ -1110,7 +1125,7 @@ fn (mut s Scanner) invalid_character() {
 	len := utf8_char_len(s.text[s.pos])
 	end := mathutil.min(s.pos + len, s.text.len)
 	c := s.text[s.pos..end]
-	s.error('invalid character `$c`')
+	s.error('invalid character `{c}`')
 }
 
 fn (s &Scanner) current_column() int {
@@ -1170,6 +1185,7 @@ fn (mut s Scanner) ident_string() string {
 		}
 		c := s.text[s.pos]
 		prevc := s.text[s.pos - 1]
+		nextc := s.text[s.pos + 1]
 		if c == scanner.backslash {
 			backslash_count++
 		}
@@ -1191,39 +1207,66 @@ fn (mut s Scanner) ident_string() string {
 		if backslash_count % 2 == 1 && !is_raw && !is_cstr {
 			// Escape `\x`
 			if c == `x` {
-				if s.text[s.pos + 1] == s.quote || !(s.text[s.pos + 1].is_hex_digit()
-					&& s.text[s.pos + 2].is_hex_digit()) {
+				if nextc == s.quote || !(nextc.is_hex_digit() && s.text[s.pos + 2].is_hex_digit()) {
 					s.error(r'`\x` used without two following hex digits')
 				}
 				h_escapes_pos << s.pos - 1
 			}
 			// Escape `\u`
 			if c == `u` {
-				if s.text[s.pos + 1] == s.quote || s.text[s.pos + 2] == s.quote
-					|| s.text[s.pos + 3] == s.quote || s.text[s.pos + 4] == s.quote
-					|| !s.text[s.pos + 1].is_hex_digit() || !s.text[s.pos + 2].is_hex_digit()
-					|| !s.text[s.pos + 3].is_hex_digit() || !s.text[s.pos + 4].is_hex_digit() {
+				if nextc == s.quote || s.text[s.pos + 2] == s.quote || s.text[s.pos + 3] == s.quote
+					|| s.text[s.pos + 4] == s.quote || !nextc.is_hex_digit()
+					|| !s.text[s.pos + 2].is_hex_digit() || !s.text[s.pos + 3].is_hex_digit()
+					|| !s.text[s.pos + 4].is_hex_digit() {
 					s.error(r'`\u` incomplete unicode character value')
 				}
 				u_escapes_pos << s.pos - 1
 			}
 		}
-		// ${var} (ignore in vfmt mode) (skip \$)
+		// '${var}' (ignore in vfmt mode) (skip \$)
 		if prevc == `$` && c == `{` && !is_raw
 			&& s.count_symbol_before(s.pos - 2, scanner.backslash) % 2 == 0 {
 			s.is_inside_string = true
 			s.is_enclosed_inter = true
+			s.is_inside_interpolation = true
 			// so that s.pos points to $ at the next step
 			s.pos -= 2
 			break
 		}
-		// $var
+		// '$var'
 		if prevc == `$` && util.is_name_char(c) && !is_raw
 			&& s.count_symbol_before(s.pos - 2, scanner.backslash) % 2 == 0 {
 			s.is_inside_string = true
 			s.is_inter_start = true
+			s.is_inside_interpolation = true
 			s.pos -= 2
 			break
+		}
+		// '{var}' (ignore in vfmt mode) (skip \{)
+		if c == `{` && (util.is_name_char(nextc) || nextc == `@`) && prevc != `$` && !is_raw
+			&& s.count_symbol_before(s.pos - 1, scanner.backslash) % 2 == 0 {
+			// Detect certain strings with "{" that are not interpolation:
+			// e.g. "{init: " (no "}" at the end)
+			if s.is_valid_interpolation(s.pos + 1) {
+				s.is_inside_string = true
+				s.is_enclosed_inter = true
+				// so that s.pos points to $ at the next step
+				s.pos -= 1
+				break
+			}
+		}
+		// '{var1}{var2}'
+		if prevc == `{` && (util.is_name_char(c) || c == `@`) && s.text[s.pos - 2] !in [`$`, `{`]
+			&& !is_raw && s.count_symbol_before(s.pos - 2, scanner.backslash) % 2 == 0 {
+			// Detect certain strings with "{" that are not interpolation:
+			// e.g. "{init: " (no "}" at the end)
+			if s.is_valid_interpolation(s.pos) {
+				s.is_inside_string = true
+				s.is_enclosed_inter = true
+				// so that s.pos points to $ at the next step
+				s.pos -= 2
+				break
+			}
 		}
 		if c != scanner.backslash {
 			backslash_count = 0
@@ -1236,12 +1279,38 @@ fn (mut s Scanner) ident_string() string {
 	}
 	if start <= s.pos {
 		mut string_so_far := s.text[start..end]
-		if !s.is_fmt && u_escapes_pos.len > 0 {
-			string_so_far = s.decode_u_escapes(string_so_far, start, u_escapes_pos)
+		if !s.is_fmt {
+			mut segment_idx := 0
+			mut str_segments := []string{}
+			if u_escapes_pos.len + h_escapes_pos.len > 0 {
+				mut all_pos := []int{}
+				all_pos << u_escapes_pos
+				all_pos << h_escapes_pos
+				if u_escapes_pos.len != 0 && h_escapes_pos.len != 0 {
+					all_pos.sort()
+				}
+				for pos in all_pos {
+					str_segments << string_so_far[segment_idx..(pos - start)]
+					segment_idx = pos - start
+
+					if pos in u_escapes_pos {
+						end_idx, segment := s.decode_u_escape_single(string_so_far, segment_idx)
+						str_segments << segment
+						segment_idx = end_idx
+					}
+					if pos in h_escapes_pos {
+						end_idx, segment := decode_h_escape_single(string_so_far, segment_idx)
+						str_segments << segment
+						segment_idx = end_idx
+					}
+				}
+			}
+			if segment_idx < string_so_far.len {
+				str_segments << string_so_far[segment_idx..]
+			}
+			string_so_far = str_segments.join('')
 		}
-		if !s.is_fmt && h_escapes_pos.len > 0 {
-			string_so_far = decode_h_escapes(string_so_far, start, h_escapes_pos)
-		}
+
 		if n_cr_chars > 0 {
 			string_so_far = string_so_far.replace('\r', '')
 		}
@@ -1254,6 +1323,46 @@ fn (mut s Scanner) ident_string() string {
 	return lit
 }
 
+fn (s Scanner) is_valid_interpolation(start_pos int) bool {
+	mut is_valid_inter := true
+	mut has_rcbr := false
+	mut inside_par := false
+	for i := start_pos; i < s.text.len - 1; i++ {
+		if s.text[i] == `(` {
+			inside_par = true
+		}
+		if s.text[i] == `)` && inside_par {
+			inside_par = false
+		}
+		if s.text[i] == s.quote && !inside_par {
+			break
+		}
+		if s.text[i] == `}` {
+			// No } in this string, so it's not a valid `{x}` interpolation
+			has_rcbr = true
+		}
+		if s.text[i] == `=` && (s.text[i - 1] in [`!`, `>`, `<`] || s.text[i + 1] == `=`) {
+			// `!=` `>=` `<=` `==`
+			return true
+		}
+		if s.text[i] == `=` || (s.text[i] == `:` && s.text[i + 1].is_space()) {
+			// We reached the end of the line or string without reaching "}".
+			// Also if there's "=", there's no way it's a valid interpolation expression:
+			// e.g. `println("{a.b = 42}")` `println('{foo: bar}')`
+			is_valid_inter = false
+			break
+		}
+	}
+	return is_valid_inter && has_rcbr
+}
+
+fn decode_h_escape_single(str string, idx int) (int, string) {
+	end_idx := idx + 4 // "\xXX".len == 4
+
+	// notice this function doesn't do any decoding... it just replaces '\xc0' with the byte 0xc0
+	return end_idx, [u8(strconv.parse_uint(str[idx + 2..end_idx], 16, 8) or { 0 })].bytestr()
+}
+
 // only handle single-byte inline escapes like '\xc0'
 fn decode_h_escapes(s string, start int, escapes_pos []int) string {
 	if escapes_pos.len == 0 {
@@ -1263,9 +1372,9 @@ fn decode_h_escapes(s string, start int, escapes_pos []int) string {
 	ss << s[..escapes_pos.first() - start]
 	for i, pos in escapes_pos {
 		idx := pos - start
-		end_idx := idx + 4 // "\xXX".len == 4
-		// notice this function doesn't do any decoding... it just replaces '\xc0' with the byte 0xc0
-		ss << [u8(strconv.parse_uint(s[idx + 2..end_idx], 16, 8) or { 0 })].bytestr()
+		end_idx, segment := decode_h_escape_single(s, idx)
+		ss << segment
+
 		if i + 1 < escapes_pos.len {
 			ss << s[end_idx..escapes_pos[i + 1] - start]
 		} else {
@@ -1296,6 +1405,17 @@ fn decode_o_escapes(s string, start int, escapes_pos []int) string {
 	return ss.join('')
 }
 
+fn (mut s Scanner) decode_u_escape_single(str string, idx int) (int, string) {
+	end_idx := idx + 6 // "\uXXXX".len == 6
+	escaped_code_point := strconv.parse_uint(str[idx + 2..end_idx], 16, 32) or { 0 }
+	// Check if Escaped Code Point is invalid or not
+	if rune(escaped_code_point).length_in_bytes() == -1 {
+		s.error('invalid unicode point `{str}`')
+	}
+
+	return end_idx, utf32_to_str(u32(escaped_code_point))
+}
+
 // decode the flagged unicode escape sequences into their utf-8 bytes
 fn (mut s Scanner) decode_u_escapes(str string, start int, escapes_pos []int) string {
 	if escapes_pos.len == 0 {
@@ -1305,13 +1425,8 @@ fn (mut s Scanner) decode_u_escapes(str string, start int, escapes_pos []int) st
 	ss << str[..escapes_pos.first() - start]
 	for i, pos in escapes_pos {
 		idx := pos - start
-		end_idx := idx + 6 // "\uXXXX".len == 6
-		escaped_code_point := strconv.parse_uint(str[idx + 2..end_idx], 16, 32) or { 0 }
-		// Check if Escaped Code Point is invalid or not
-		if rune(escaped_code_point).length_in_bytes() == -1 {
-			s.error('invalid unicode point `$str`')
-		}
-		ss << utf32_to_str(u32(escaped_code_point))
+		end_idx, segment := s.decode_u_escape_single(str, idx)
+		ss << segment
 		if i + 1 < escapes_pos.len {
 			ss << str[end_idx..escapes_pos[i + 1] - start]
 		} else {
@@ -1416,15 +1531,15 @@ fn (mut s Scanner) ident_char() string {
 		u := c.runes()
 		if u.len != 1 {
 			if escaped_hex || escaped_unicode {
-				s.error('invalid character literal `$orig` => `$c` ($u) (escape sequence did not refer to a singular rune)')
+				s.error('invalid character literal `{orig}` => `{c}` ({u}) (escape sequence did not refer to a singular rune)')
 			} else if u.len == 0 {
 				s.add_error_detail_with_pos('use quotes for strings, backticks for characters',
 					lspos)
-				s.error('invalid empty character literal `$orig`')
+				s.error('invalid empty character literal `{orig}`')
 			} else {
 				s.add_error_detail_with_pos('use quotes for strings, backticks for characters',
 					lspos)
-				s.error('invalid character literal `$orig` => `$c` ($u) (more than one character)')
+				s.error('invalid character literal `{orig}` => `{c}` ({u}) (more than one character)')
 			}
 		}
 	}
@@ -1598,6 +1713,6 @@ fn (mut s Scanner) vet_error(msg string, fix vet.FixKind) {
 
 fn (mut s Scanner) trace(fbase string, message string) {
 	if s.file_base == fbase {
-		println('> s.trace | ${fbase:-10s} | $message')
+		println('> s.trace | {fbase:-10s} | {message}')
 	}
 }

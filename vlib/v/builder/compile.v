@@ -31,7 +31,7 @@ fn check_if_output_folder_is_writable(pref &pref.Preferences) {
 	if odir.len == pref.out_name.len {
 		output_folder = os.getwd()
 	}
-	os.is_writable_folder(output_folder) or {
+	os.ensure_folder_is_writable(output_folder) or {
 		// An early error here, is better than an unclear C error later:
 		verror(err.msg())
 	}
@@ -236,6 +236,9 @@ pub fn (v &Builder) get_user_files() []string {
 	if v.pref.backend == .js_node {
 		preludes_path = os.join_path(vroot, 'vlib', 'v', 'preludes_js')
 	}
+	if v.pref.trace_calls {
+		user_files << os.join_path(preludes_path, 'trace_calls.v')
+	}
 	if v.pref.is_livemain || v.pref.is_liveshared {
 		user_files << os.join_path(preludes_path, 'live.v')
 	}
@@ -309,7 +312,7 @@ pub fn (v &Builder) get_user_files() []string {
 	is_real_file := does_exist && !os.is_dir(dir)
 	resolved_link := if is_real_file && os.is_link(dir) { os.real_path(dir) } else { dir }
 	if is_real_file && (dir.ends_with('.v') || resolved_link.ends_with('.vsh')
-		|| dir.ends_with('.vv')) {
+		|| v.pref.raw_vsh_tmp_prefix != '' || dir.ends_with('.vv')) {
 		single_v_file := if resolved_link.ends_with('.vsh') { resolved_link } else { dir }
 		// Just compile one file and get parent dir
 		user_files << single_v_file

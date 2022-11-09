@@ -62,6 +62,9 @@ fn (mut c Checker) comptime_call(mut node ast.ComptimeCall) ast.Type {
 		return rtyp
 	}
 	if node.method_name == 'method' {
+		if c.inside_anon_fn && 'method' !in c.cur_anon_fn.inherited_vars.map(it.name) {
+			c.error('undefined ident `method` in the anonymous function', node.pos)
+		}
 		for i, arg in node.args {
 			// check each arg expression
 			node.args[i].typ = c.expr(arg.expr)
@@ -224,6 +227,10 @@ fn (mut c Checker) eval_comptime_const_expr(expr ast.Expr, nlevel int) ?ast.Comp
 			if expr.typ == ast.f64_type {
 				return cast_expr_value.f64() or { return none }
 			}
+			if expr.typ == ast.voidptr_type || expr.typ == ast.nil_type {
+				ptrvalue := cast_expr_value.voidptr() or { return none }
+				return ast.ComptTimeConstValue(ptrvalue)
+			}
 		}
 		ast.InfixExpr {
 			left := c.eval_comptime_const_expr(expr.left, nlevel + 1)?
@@ -365,7 +372,7 @@ fn (mut c Checker) verify_all_vweb_routes() {
 				is_ok, nroute_attributes, nargs := c.verify_vweb_params_for_method(m)
 				if !is_ok {
 					f := &ast.FnDecl(m.source_fn)
-					if isnil(f) {
+					if f == unsafe { nil } {
 						continue
 					}
 					if f.return_type == typ_vweb_result && f.receiver.typ == m.params[0].typ

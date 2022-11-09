@@ -15,6 +15,7 @@ const vet_known_failing_windows = [
 	'vlib/v/gen/js/tests/testdata/compare_ints.v',
 	'vlib/v/gen/js/tests/testdata/hw.v',
 	'vlib/v/gen/js/tests/testdata/string_methods.v',
+	'vlib/v/tests/inout/vscript_using_generics_in_os.vsh',
 	'vlib/v/tests/project_with_modules_having_submodules/bin/main.vsh',
 	'vlib/v/tests/valgrind/simple_interpolation_script_mode.v',
 	'vlib/v/tests/valgrind/simple_interpolation_script_mode_more_scopes.v',
@@ -32,21 +33,7 @@ const vet_folders = [
 	'examples/term.ui',
 ]
 
-const verify_known_failing_exceptions = [
-	// Handcrafted meaningful formatting of code parts (mostly arrays)
-	'examples/sokol/02_cubes_glsl/cube_glsl.v',
-	'examples/sokol/03_march_tracing_glsl/rt_glsl.v',
-	'examples/sokol/04_multi_shader_glsl/rt_glsl.v',
-	'examples/sokol/05_instancing_glsl/rt_glsl.v',
-	'examples/sokol/06_obj_viewer/show_obj.v',
-	'vlib/v/checker/tests/modules/deprecated_module/main.v' /* adds deprecated_module. module prefix to imports, even though the folder has v.mod */,
-	'vlib/gg/m4/graphic.v',
-	'vlib/gg/m4/m4_test.v',
-	'vlib/gg/m4/matrix.v',
-	'vlib/builtin/int_test.v' /* special number formatting that should be tested */,
-	// TODOs and unfixed vfmt bugs
-	'vlib/v/gen/js/tests/js.v', /* local `hello` fn, gets replaced with module `hello` aliased as `hl` */
-]
+const verify_known_failing_exceptions = []string{}
 
 const vfmt_verify_list = [
 	'cmd/',
@@ -55,11 +42,7 @@ const vfmt_verify_list = [
 	'vlib/',
 ]
 
-const vfmt_known_failing_exceptions = arrays.merge(verify_known_failing_exceptions, [
-	'vlib/regex/regex_test.v' /* contains meaningfull formatting of the test case data */,
-	'vlib/crypto/sha512/sha512block_generic.v' /* formatting of large constant arrays wraps to too many lines */,
-	'vlib/crypto/aes/const.v' /* formatting of large constant arrays wraps to too many lines */,
-])
+const vfmt_known_failing_exceptions = arrays.merge(verify_known_failing_exceptions, []string{})
 
 const vexe = os.getenv('VEXE')
 

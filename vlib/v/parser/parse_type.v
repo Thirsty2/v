@@ -310,7 +310,7 @@ pub fn (mut p Parser) parse_inline_sum_type() ast.Type {
 	variants := p.parse_sum_type_variants()
 	if variants.len > 1 {
 		if variants.len > parser.maximum_inline_sum_type_variants {
-			pos := variants[0].pos.extend(variants[variants.len - 1].pos)
+			pos := variants[0].pos.extend(variants.last().pos)
 			p.warn_with_pos('an inline sum type expects a maximum of $parser.maximum_inline_sum_type_variants types ($variants.len were given)',
 				pos)
 		}
@@ -431,8 +431,8 @@ pub fn (mut p Parser) parse_type() ast.Type {
 	language := p.parse_language()
 	mut typ := ast.void_type
 	is_array := p.tok.kind == .lsbr
+	pos := p.tok.pos()
 	if p.tok.kind != .lcbr {
-		pos := p.tok.pos()
 		typ = p.parse_any_type(language, nr_muls > 0, true)
 		if typ.idx() == 0 {
 			// error is set in parse_type
@@ -462,9 +462,10 @@ pub fn (mut p Parser) parse_type() ast.Type {
 	if nr_muls > 0 {
 		typ = typ.set_nr_muls(nr_muls)
 		if is_array && nr_amps > 0 {
-			p.error('V arrays are already references behind the scenes,
+			p.error_with_pos('V arrays are already references behind the scenes,
 there is no need to use a reference to an array (e.g. use `[]string` instead of `&[]string`).
-If you need to modify an array in a function, use a mutable argument instead: `fn foo(mut s []string) {}`.')
+If you need to modify an array in a function, use a mutable argument instead: `fn foo(mut s []string) {}`.',
+				pos)
 			return 0
 		}
 	}
@@ -681,7 +682,7 @@ pub fn (mut p Parser) parse_generic_inst_type(name string) ast.Type {
 			p.error_with_pos('cannot use multi return as generic concrete type', type_pos)
 		}
 		if !is_instance && gts.name.len > 1 {
-			p.error_with_pos('generic struct parameter name needs to be exactly one char',
+			p.error_with_pos('the parameter type name of a generic struct, must be a single capital letter placeholder name, like T or X, or a non-generic type name like int, string, etc.',
 				type_pos)
 		}
 		bs_name += gts.name

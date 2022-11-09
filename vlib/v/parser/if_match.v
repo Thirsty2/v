@@ -117,7 +117,7 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 				p.error_with_pos('if guard condition expression is illegal, it should return optional',
 					expr.pos())
 			}
-			p.check_undefined_variables_by_names(var_names, expr) or {
+			p.check_undefined_variables(var_names, expr) or {
 				p.error_with_pos(err.msg(), pos)
 				break
 			}
@@ -238,7 +238,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 			&& (((ast.builtin_type_names_matcher.matches(p.tok.lit) || p.tok.lit[0].is_capital())
 			&& p.peek_tok.kind != .lpar) || (p.peek_tok.kind == .dot && p.peek_token(2).lit.len > 0
 			&& p.peek_token(2).lit[0].is_capital()))) || p.is_only_array_type()
-			|| p.tok.lit == 'fn' {
+			|| p.tok.kind == .key_fn {
 			mut types := []ast.Type{}
 			for {
 				// Sum type match

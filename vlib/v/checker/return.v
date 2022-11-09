@@ -7,7 +7,7 @@ import v.pref
 
 // TODO: non deferred
 pub fn (mut c Checker) return_stmt(mut node ast.Return) {
-	if isnil(c.table.cur_fn) {
+	if c.table.cur_fn == unsafe { nil } {
 		return
 	}
 	c.expected_type = c.table.cur_fn.return_type
@@ -39,8 +39,12 @@ pub fn (mut c Checker) return_stmt(mut node ast.Return) {
 	mut expr_idxs := []int{}
 	for i, expr in node.exprs {
 		mut typ := c.expr(expr)
+		if typ == 0 {
+			return
+		}
 		if typ == ast.void_type {
 			c.error('`$expr` used as value', node.pos)
+			return
 		}
 		// Unpack multi return types
 		sym := c.table.sym(typ)
@@ -90,6 +94,21 @@ pub fn (mut c Checker) return_stmt(mut node ast.Return) {
 		return
 	}
 	if expected_types.len > 0 && expected_types.len != got_types.len {
+		// `fn foo() !(int, string) { return Err{} }`
+		if (exp_is_optional || exp_is_result) && node.exprs.len == 1 {
+			got_typ := c.expr(node.exprs[0])
+			got_typ_sym := c.table.sym(got_typ)
+			if got_typ_sym.kind == .struct_ && c.type_implements(got_typ, ast.error_type, node.pos) {
+				node.exprs[0] = ast.CastExpr{
+					expr: node.exprs[0]
+					typname: 'IError'
+					typ: ast.error_type
+					expr_type: got_typ
+				}
+				node.types[0] = ast.error_type
+				return
+			}
+		}
 		arg := if expected_types.len == 1 { 'argument' } else { 'arguments' }
 		midx := imax(0, imin(expected_types.len, expr_idxs.len - 1))
 		mismatch_pos := node.exprs[expr_idxs[midx]].pos()
@@ -110,26 +129,50 @@ pub fn (mut c Checker) return_stmt(mut node ast.Return) {
 			c.error('cannot use `${c.table.type_to_str(got_typ)}` as type `${c.table.type_to_str(exp_type)}` in return argument',
 				pos)
 		}
-		if node.exprs[expr_idxs[i]] !is ast.ComptimeCall && !c.check_types(got_typ, exp_type) {
+		if node.exprs[expr_idxs[i]] !is ast.ComptimeCall {
 			got_typ_sym := c.table.sym(got_typ)
-			mut exp_typ_sym := c.table.sym(exp_type)
-			if exp_typ_sym.kind == .interface_ {
-				if c.type_implements(got_typ, exp_type, node.pos) {
-					if !got_typ.is_ptr() && !got_typ.is_pointer() && got_typ_sym.kind != .interface_
-						&& !c.inside_unsafe {
-						c.mark_as_referenced(mut &node.exprs[expr_idxs[i]], true)
+			exp_typ_sym := c.table.sym(exp_type)
+			pos := node.exprs[expr_idxs[i]].pos()
+			if c.check_types(got_typ, exp_type) {
+				if exp_type.is_unsigned() && got_typ.is_int_literal() {
+					if node.exprs[expr_idxs[i]] is ast.IntegerLiteral {
+						var := (node.exprs[expr_idxs[i]] as ast.IntegerLiteral).val
+						if var[0] == `-` {
+							c.note('cannot use a negative value as value of type `${c.table.type_to_str(exp_type)}` in return argument',
+								pos)
+						}
 					}
 				}
-				continue
-			}
-			if got_typ_sym.kind == .function && exp_typ_sym.kind == .function {
-				if (got_typ_sym.info as ast.FnType).is_anon {
+			} else {
+				if exp_typ_sym.kind == .interface_ {
+					if c.type_implements(got_typ, exp_type, node.pos) {
+						if !got_typ.is_ptr() && !got_typ.is_pointer()
+							&& got_typ_sym.kind != .interface_ && !c.inside_unsafe {
+							c.mark_as_referenced(mut &node.exprs[expr_idxs[i]], true)
+						}
+					}
 					continue
 				}
+				// `fn foo() !int { return Err{} }`
+				if got_typ_sym.kind == .struct_
+					&& c.type_implements(got_typ, ast.error_type, node.pos) {
+					node.exprs[expr_idxs[i]] = ast.CastExpr{
+						expr: node.exprs[expr_idxs[i]]
+						typname: 'IError'
+						typ: ast.error_type
+						expr_type: got_typ
+					}
+					node.types[expr_idxs[i]] = ast.error_type
+					continue
+				}
+				got_typ_name := if got_typ_sym.kind == .function {
+					'${c.table.type_to_str(got_typ)}'
+				} else {
+					got_typ_sym.name
+				}
+				c.error('cannot use `$got_typ_name` as type `${c.table.type_to_str(exp_type)}` in return argument',
+					pos)
 			}
-			pos := node.exprs[expr_idxs[i]].pos()
-			c.error('cannot use `$got_typ_sym.name` as type `${c.table.type_to_str(exp_type)}` in return argument',
-				pos)
 		}
 		if (got_typ.is_ptr() || got_typ.is_pointer())
 			&& (!exp_type.is_ptr() && !exp_type.is_pointer()) {

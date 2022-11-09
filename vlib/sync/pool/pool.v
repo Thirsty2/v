@@ -42,7 +42,7 @@ pub struct PoolProcessorConfig {
 //      3) task_id - the index of the worker thread in which the callback
 //            function is running.
 pub fn new_pool_processor(context PoolProcessorConfig) &PoolProcessor {
-	if isnil(context.callback) {
+	if context.callback == unsafe { nil } {
 		panic('You need to pass a valid callback to new_pool_processor.')
 	}
 	mut pool := PoolProcessor{
@@ -89,7 +89,7 @@ pub fn (mut pool PoolProcessor) work_on_pointers(items []voidptr) {
 		pool.waitgroup.add(njobs)
 		for i := 0; i < njobs; i++ {
 			if njobs > 1 {
-				go process_in_thread(mut pool, i)
+				spawn process_in_thread(mut pool, i)
 			} else {
 				// do not run concurrently, just use the same thread:
 				process_in_thread(mut pool, i)

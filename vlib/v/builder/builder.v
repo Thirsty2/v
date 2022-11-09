@@ -20,8 +20,8 @@ pub:
 	compiled_dir string // contains os.real_path() of the dir of the final file being compiled, or the dir itself when doing `v .`
 	module_path  string
 pub mut:
-	checker             &checker.Checker
-	transformer         &transformer.Transformer
+	checker             &checker.Checker = unsafe { nil }
+	transformer         &transformer.Transformer = unsafe { nil }
 	out_name_c          string
 	out_name_js         string
 	stats_lines         int // size of backend generated source code in lines
@@ -29,13 +29,13 @@ pub mut:
 	nr_errors           int // accumulated error count of scanner, parser, checker, and builder
 	nr_warnings         int // accumulated warning count of scanner, parser, checker, and builder
 	nr_notices          int // accumulated notice count of scanner, parser, checker, and builder
-	pref                &pref.Preferences
+	pref                &pref.Preferences = unsafe { nil }
 	module_search_paths []string
 	parsed_files        []&ast.File
 	//$if windows {
 	cached_msvc MsvcResult
 	//}
-	table     &ast.Table
+	table     &ast.Table = unsafe { nil }
 	ccoptions CcompilerOptions
 	//
 	// Note: changes in mod `builtin` force invalidation of every other .v file
@@ -88,7 +88,7 @@ pub fn new_builder(pref &pref.Preferences) Builder {
 	}
 }
 
-pub fn (mut b Builder) front_stages(v_files []string) ? {
+pub fn (mut b Builder) front_stages(v_files []string) ! {
 	mut timers := util.get_timers()
 	util.timing_start('PARSE')
 
@@ -102,11 +102,11 @@ pub fn (mut b Builder) front_stages(v_files []string) ? {
 	timers.show('PARSE')
 	timers.show_if_exists('PARSE stmt')
 	if b.pref.only_check_syntax {
-		return error_with_code('stop_after_parser', 9999)
+		return error_with_code('stop_after_parser', 7001)
 	}
 }
 
-pub fn (mut b Builder) middle_stages() ? {
+pub fn (mut b Builder) middle_stages() ! {
 	util.timing_start('CHECK')
 
 	util.timing_start('Checker.generic_insts_to_concrete')
@@ -120,7 +120,7 @@ pub fn (mut b Builder) middle_stages() ? {
 		return error('too many errors/warnings/notices')
 	}
 	if b.pref.check_only {
-		return error_with_code('stop_after_checker', 9999)
+		return error_with_code('stop_after_checker', 8001)
 	}
 	util.timing_start('TRANSFORM')
 	b.transformer.transform_files(b.parsed_files)
@@ -135,9 +135,9 @@ pub fn (mut b Builder) middle_stages() ? {
 	}
 }
 
-pub fn (mut b Builder) front_and_middle_stages(v_files []string) ? {
-	b.front_stages(v_files)?
-	b.middle_stages()?
+pub fn (mut b Builder) front_and_middle_stages(v_files []string) ! {
+	b.front_stages(v_files)!
+	b.middle_stages()!
 }
 
 // parse all deps from already parsed files

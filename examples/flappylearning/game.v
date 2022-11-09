@@ -66,7 +66,7 @@ fn (p Pipe) is_out() bool {
 
 struct App {
 mut:
-	gg               &gg.Context
+	gg               &gg.Context = unsafe { nil }
 	background       gg.Image
 	bird             gg.Image
 	pipetop          gg.Image
@@ -198,7 +198,7 @@ fn main() {
 		network: [2, 2, 1]
 	}
 	app.start()
-	go app.run()
+	spawn app.run()
 	app.gg.run()
 }
 

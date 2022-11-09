@@ -8,7 +8,6 @@ import os.cmdline
 import rand
 import term
 import vhelp
-import v.pref
 import regex
 
 const (
@@ -22,7 +21,9 @@ const (
 	show_progress                  = os.getenv('GITHUB_JOB') == '' && '-silent' !in os.args
 	non_option_args                = cmdline.only_non_options(os.args[2..])
 	is_verbose                     = os.getenv('VERBOSE') != ''
-	vcheckfolder                   = os.join_path_single(os.temp_dir(), 'vcheck_$os.getuid()')
+	vcheckfolder                   = os.join_path(os.vtmp_dir(), 'v', 'vcheck_$os.getuid()')
+	should_autofix                 = os.getenv('VAUTOFIX') != ''
+	vexe                           = @VEXE
 )
 
 struct CheckResult {
@@ -154,9 +155,9 @@ enum MDFileParserState {
 }
 
 struct MDFile {
-	path  string
-	lines []string
+	path string
 mut:
+	lines    []string
 	examples []VCodeExample
 	current  VCodeExample
 	state    MDFileParserState = .markdown
@@ -422,8 +423,7 @@ fn get_fmt_exit_code(vfile string, vexe string) int {
 fn (mut f MDFile) check_examples() CheckResult {
 	mut errors := 0
 	mut oks := 0
-	vexe := pref.vexe_path()
-	for e in f.examples {
+	recheck_all_examples: for e in f.examples {
 		if e.command == 'ignore' {
 			continue
 		}
@@ -451,8 +451,10 @@ fn (mut f MDFile) check_examples() CheckResult {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'example failed to compile'))
 						}
-						if fmt_res != 0 {
-							eprintln(eline(f.path, e.sline, 0, 'example is not formatted'))
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
@@ -467,8 +469,10 @@ fn (mut f MDFile) check_examples() CheckResult {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'example failed to generate C code'))
 						}
-						if fmt_res != 0 {
-							eprintln(eline(f.path, e.sline, 0, 'example is not formatted'))
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
@@ -483,8 +487,10 @@ fn (mut f MDFile) check_examples() CheckResult {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, '`example failed to compile with -enable-globals'))
 						}
-						if fmt_res != 0 {
-							eprintln(eline(f.path, e.sline, 0, '`example is not formatted'))
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
@@ -499,8 +505,28 @@ fn (mut f MDFile) check_examples() CheckResult {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'example failed to compile with -live'))
 						}
-						if fmt_res != 0 {
-							eprintln(eline(f.path, e.sline, 0, 'example is not formatted'))
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
+						}
+						eprintln(vcontent)
+						should_cleanup_vfile = false
+						errors++
+						continue
+					}
+					oks++
+				}
+				'shared' {
+					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -shared -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
+					if res != 0 || fmt_res != 0 {
+						if res != 0 {
+							eprintln(eline(f.path, e.sline, 0, 'module example failed to compile with -shared'))
+						}
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
@@ -515,8 +541,10 @@ fn (mut f MDFile) check_examples() CheckResult {
 						if res == 0 {
 							eprintln(eline(f.path, e.sline, 0, '`failcompile` example compiled'))
 						}
-						if fmt_res != 0 {
-							eprintln(eline(f.path, e.sline, 0, 'example is not formatted'))
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
@@ -531,8 +559,24 @@ fn (mut f MDFile) check_examples() CheckResult {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, '`oksyntax` example with invalid syntax'))
 						}
-						if fmt_res != 0 {
-							eprintln(eline(f.path, e.sline, 0, '`oksyntax` example is not formatted'))
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
+						}
+						eprintln(vcontent)
+						should_cleanup_vfile = false
+						errors++
+						continue
+					}
+					oks++
+				}
+				'okfmt' {
+					if fmt_res != 0 {
+						f.report_not_formatted_example_if_needed(e, fmt_res, vfile) or {
+							unsafe {
+								goto recheck_all_examples
+							}
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
@@ -554,7 +598,7 @@ fn (mut f MDFile) check_examples() CheckResult {
 				}
 				'nofmt' {}
 				else {
-					eprintln(eline(f.path, e.sline, 0, 'unrecognized command: "$command", use one of: wip/ignore/compile/cgen/failcompile/oksyntax/badsyntax/nofmt'))
+					eprintln(eline(f.path, e.sline, 0, 'unrecognized command: "$command", use one of: wip/ignore/compile/failcompile/okfmt/nofmt/oksyntax/badsyntax/cgen/globals/live/shared'))
 					should_cleanup_vfile = false
 					errors++
 				}
@@ -583,4 +627,53 @@ fn clear_previous_line() {
 		return
 	}
 	term.clear_previous_line()
+}
+
+fn (mut f MDFile) report_not_formatted_example_if_needed(e VCodeExample, fmt_res int, vfile string) ! {
+	if fmt_res == 0 {
+		return
+	}
+	eprintln(eline(f.path, e.sline, 0, 'example is not formatted'))
+	if !should_autofix {
+		return
+	}
+	f.autofix_example(e, vfile) or {
+		if err is ExampleWasRewritten {
+			eprintln('>> f.path: $f.path | example from $e.sline to $e.eline was re-formated by vfmt')
+			return err
+		}
+		eprintln('>> f.path: $f.path | encountered error while autofixing the example: $err')
+	}
+}
+
+struct ExampleWasRewritten {
+	Error
+}
+
+fn (mut f MDFile) autofix_example(e VCodeExample, vfile string) ! {
+	eprintln('>>> AUTOFIXING f.path: $f.path | e.sline: $e.sline | vfile: $vfile')
+	res := cmdexecute('${os.quoted_path(vexe)} fmt -w ${os.quoted_path(vfile)}')
+	if res != 0 {
+		return error('could not autoformat the example')
+	}
+	formatted_content_lines := os.read_lines(vfile) or { return }
+	mut new_lines := []string{}
+	new_lines << f.lines#[0..e.sline + 1]
+	new_lines << formatted_content_lines
+	new_lines << f.lines#[e.eline..]
+	f.update_examples(new_lines)!
+	os.rm(vfile) or {}
+	f.examples = f.examples.filter(it.sline >= e.sline)
+	return ExampleWasRewritten{}
+}
+
+fn (mut f MDFile) update_examples(new_lines []string) ! {
+	os.write_file(f.path, new_lines.join('\n'))!
+	f.lines = new_lines
+	f.examples = []
+	f.current = VCodeExample{}
+	f.state = .markdown
+	for j, line in f.lines {
+		f.parse_line(j, line)
+	}
 }

@@ -122,7 +122,7 @@ fn (a array) repeat_to_depth_noscan(count int, depth int) array {
 
 // insert inserts a value in the array at index `i`
 fn (mut a array) insert_noscan(i int, val voidptr) {
-	$if !no_bounds_checking ? {
+	$if !no_bounds_checking {
 		if i < 0 || i > a.len {
 			panic('array.insert: index out of range (i == $i, a.len == $a.len)')
 		}
@@ -138,7 +138,7 @@ fn (mut a array) insert_noscan(i int, val voidptr) {
 // insert_many inserts many values into the array from index `i`.
 [unsafe]
 fn (mut a array) insert_many_noscan(i int, val voidptr, size int) {
-	$if !no_bounds_checking ? {
+	$if !no_bounds_checking {
 		if i < 0 || i > a.len {
 			panic('array.insert_many: index out of range (i == $i, a.len == $a.len)')
 		}
@@ -167,7 +167,7 @@ fn (mut a array) prepend_many_noscan(val voidptr, size int) {
 // pop returns the last element of the array, and removes it.
 fn (mut a array) pop_noscan() voidptr {
 	// in a sense, this is the opposite of `a << x`
-	$if !no_bounds_checking ? {
+	$if !no_bounds_checking {
 		if a.len == 0 {
 			panic('array.pop: array is empty')
 		}
@@ -227,7 +227,7 @@ fn (mut a array) push_noscan(val voidptr) {
 // `val` is array.data and user facing usage is `a << [1,2,3]`
 [unsafe]
 fn (mut a3 array) push_many_noscan(val voidptr, size int) {
-	if size <= 0 || isnil(val) {
+	if size <= 0 || val == unsafe { nil } {
 		return
 	}
 	if a3.data == val && a3.data != 0 {

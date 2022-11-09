@@ -651,7 +651,7 @@ fn (g &JsGen) type_to_fmt(typ ast.Type) StrIntpType {
 	if typ == ast.char_type_idx {
 		return .si_c
 	}
-	if typ in ast.voidptr_types || typ in ast.byteptr_types {
+	if typ in ast.voidptr_types || typ == ast.nil_type || typ in ast.byteptr_types {
 		return .si_p
 	}
 	if typ in ast.charptr_types {
@@ -763,7 +763,7 @@ fn (mut g JsGen) gen_str_for_struct(info ast.Struct, styp string, str_fn_name st
 		} else {
 			// manage C charptr
 			if field.typ in ast.charptr_types {
-				fn_builder.write_string('tos2((byteptr)$func)')
+				fn_builder.write_string('tos4((byteptr)$func)')
 			} else {
 				if field.typ.is_ptr() && sym.kind == .struct_ {
 					fn_builder.write_string('(indent_count > 25)? new string("<probably circular>") : ')
@@ -812,18 +812,18 @@ fn struct_auto_str_func(mut g JsGen, sym &ast.TypeSymbol, field_type ast.Type, f
 			// ptr int can be "nil", so this needs to be casted to a string
 			if sym.kind == .f32 {
 				return 'str_intp(1, _MOV((StrIntpData[]){
-					{_SLIT0, $si_g32_code, {.d_f32 = *$method_str }}
+					{ _SLIT0, $si_g32_code, {.d_f32 = *$method_str }}
 				}))'
 			} else if sym.kind == .f64 {
 				return 'str_intp(1, _MOV((StrIntpData[]){
-					{_SLIT0, $si_g64_code, {.d_f64 = *$method_str }}
+					{ _SLIT0, $si_g64_code, {.d_f64 = *$method_str }}
 				}))'
 			} else if sym.kind == .u64 {
 				fmt_type := StrIntpType.si_u64
-				return 'str_intp(1, _MOV((StrIntpData[]){{_SLIT0, ${u32(fmt_type) | 0xfe00}, {.d_u64 = *$method_str }}}))'
+				return 'str_intp(1, _MOV((StrIntpData[]){{ _SLIT0, ${u32(fmt_type) | 0xfe00}, {.d_u64 = *$method_str }}}))'
 			}
 			fmt_type := StrIntpType.si_i32
-			return 'str_intp(1, _MOV((StrIntpData[]){{_SLIT0, ${u32(fmt_type) | 0xfe00}, {.d_i32 = *$method_str }}}))'
+			return 'str_intp(1, _MOV((StrIntpData[]){{ _SLIT0, ${u32(fmt_type) | 0xfe00}, {.d_i32 = *$method_str }}}))'
 		}
 		return method_str
 	}

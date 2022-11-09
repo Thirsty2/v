@@ -8,17 +8,18 @@ import v.ast
 
 pub fn (mut f Fmt) struct_decl(node ast.StructDecl, is_anon bool) {
 	f.attrs(node.attrs)
-	if node.is_pub {
+	if node.is_pub && !is_anon {
 		f.write('pub ')
 	}
 	if node.is_union {
-		f.write('union ')
+		f.write('union')
 	} else {
-		f.write('struct ')
+		f.write('struct')
 	}
-	f.write_language_prefix(node.language)
 	name := node.name.after('.') // strip prepended module
 	if !is_anon {
+		f.write(' ')
+		f.write_language_prefix(node.language)
 		f.write(name)
 	}
 	f.write_generic_types(node.generic_types)
@@ -253,7 +254,7 @@ pub fn (mut f Fmt) struct_init(node ast.StructInit) {
 		if node.pos.line_nr < node.pos.last_line || node.pre_comments.len > 0 {
 			single_line_fields = false
 		}
-		if !use_short_args {
+		if !use_short_args || node.is_anon {
 			f.write('$name{')
 			f.mark_import_as_used(name)
 			if single_line_fields {
@@ -263,7 +264,7 @@ pub fn (mut f Fmt) struct_init(node ast.StructInit) {
 		fields_start := f.out.len
 		fields_loop: for {
 			if !single_line_fields {
-				if use_short_args && f.out[f.out.len - 1] == ` ` {
+				if use_short_args && f.out.last() == ` ` {
 					//           v Remove space at tail of line
 					// f(a, b, c, \n
 					//     f1: 0\n
@@ -315,7 +316,7 @@ pub fn (mut f Fmt) struct_init(node ast.StructInit) {
 		if !single_line_fields {
 			f.indent--
 		}
-		if !use_short_args {
+		if !use_short_args || node.is_anon {
 			if single_line_fields {
 				f.write(' ')
 			}

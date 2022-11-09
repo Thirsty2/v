@@ -18,7 +18,7 @@ const (
 
 struct App {
 mut:
-	gg      &gg.Context
+	gg      &gg.Context = unsafe { nil }
 	ch      chan i64
 	counter i64
 }
@@ -42,7 +42,7 @@ fn main() {
 
 fn init(mut app App) {
 	// Spawn a new worker thread.
-	go worker(mut app)
+	spawn worker(mut app)
 }
 
 // worker simulates a workload. This should be run in a separate thread.

@@ -46,7 +46,7 @@ fn test_a_simple_vweb_app_runs_in_the_background() {
 		eprintln('running:\n$server_exec_cmd')
 	}
 	$if windows {
-		go os.system(server_exec_cmd)
+		spawn os.system(server_exec_cmd)
 	} $else {
 		res := os.system(server_exec_cmd)
 		assert res == 0
@@ -116,14 +116,14 @@ fn assert_common_http_headers(x http.Response) ? {
 	assert x.header.get(.connection)? == 'close'
 }
 
-fn test_http_client_index() ? {
+fn test_http_client_index() {
 	x := http.get('http://$localserver/') or { panic(err) }
 	assert_common_http_headers(x)?
 	assert x.header.get(.content_type)? == 'text/plain'
 	assert x.body == 'Welcome to VWeb'
 }
 
-fn test_http_client_404() ? {
+fn test_http_client_404() {
 	url_404_list := [
 		'http://$localserver/zxcnbnm',
 		'http://$localserver/JHKAJA',
@@ -135,21 +135,21 @@ fn test_http_client_404() ? {
 	}
 }
 
-fn test_http_client_simple() ? {
+fn test_http_client_simple() {
 	x := http.get('http://$localserver/simple') or { panic(err) }
 	assert_common_http_headers(x)?
 	assert x.header.get(.content_type)? == 'text/plain'
 	assert x.body == 'A simple result'
 }
 
-fn test_http_client_html_page() ? {
+fn test_http_client_html_page() {
 	x := http.get('http://$localserver/html_page') or { panic(err) }
 	assert_common_http_headers(x)?
 	assert x.header.get(.content_type)? == 'text/html'
 	assert x.body == '<h1>ok</h1>'
 }
 
-fn test_http_client_settings_page() ? {
+fn test_http_client_settings_page() {
 	x := http.get('http://$localserver/bilbo/settings') or { panic(err) }
 	assert_common_http_headers(x)?
 	assert x.body == 'username: bilbo'
@@ -159,7 +159,7 @@ fn test_http_client_settings_page() ? {
 	assert y.body == 'username: kent'
 }
 
-fn test_http_client_user_repo_settings_page() ? {
+fn test_http_client_user_repo_settings_page() {
 	x := http.get('http://$localserver/bilbo/gostamp/settings') or { panic(err) }
 	assert_common_http_headers(x)?
 	assert x.body == 'username: bilbo | repository: gostamp'
@@ -177,7 +177,7 @@ struct User {
 	age  int
 }
 
-fn test_http_client_json_post() ? {
+fn test_http_client_json_post() {
 	ouser := User{
 		name: 'Bilbo'
 		age: 123
@@ -202,7 +202,7 @@ fn test_http_client_json_post() ? {
 	assert '$ouser' == '$nuser2'
 }
 
-fn test_http_client_multipart_form_data() ? {
+fn test_http_client_multipart_form_data() {
 	boundary := '6844a625b1f0b299'
 	name := 'foo'
 	ct := 'multipart/form-data; boundary=$boundary'

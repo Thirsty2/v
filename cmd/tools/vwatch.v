@@ -84,7 +84,7 @@ mut:
 	vfiles          []VFileStat
 	opts            []string
 	rerun_channel   chan RerunCommand
-	child_process   &os.Process
+	child_process   &os.Process = unsafe { nil }
 	is_exiting      bool     // set by SIGINT/Ctrl-C
 	v_cycles        int      // how many times the worker has restarted the V compiler
 	scan_cycles     int      // how many times the worker has scanned for source file changes
@@ -318,7 +318,7 @@ fn main() {
 	fp.description('Collect all .v files needed for a compilation, then re-run the compilation when any of the source changes.')
 	fp.arguments_description('[--silent] [--clear] [--ignore .db] [--add /path/to/a/file.v] [run] program.v')
 	fp.allow_unknown_args()
-	fp.limit_free_args_to_at_least(1)?
+	fp.limit_free_args_to_at_least(1)!
 	context.is_worker = fp.bool('vwatchworker', 0, false, 'Internal flag. Used to distinguish vwatch manager and worker processes.')
 	context.silent = fp.bool('silent', `s`, false, 'Be more silent; do not print the watch timestamp before each re-run.')
 	context.clear_terminal = fp.bool('clear', `c`, false, 'Clears the terminal before each re-run.')
@@ -381,6 +381,6 @@ fn (mut context Context) worker_main() {
 		context.is_exiting = true
 		context.kill_pgroup()
 	}) or { panic(err) }
-	go context.compilation_runner_loop()
+	spawn context.compilation_runner_loop()
 	change_detection_loop(context)
 }

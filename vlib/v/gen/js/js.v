@@ -46,13 +46,13 @@ mut:
 struct JsGen {
 	pref &pref.Preferences
 mut:
-	table                  &ast.Table
+	table                  &ast.Table = unsafe { nil }
 	definitions            strings.Builder
-	ns                     &Namespace
+	ns                     &Namespace = unsafe { nil }
 	namespaces             map[string]&Namespace
-	doc                    &JsDoc
+	doc                    &JsDoc = unsafe { nil }
 	enable_doc             bool
-	file                   &ast.File
+	file                   &ast.File = unsafe { nil }
 	tmp_count              int
 	inside_ternary         bool
 	inside_or              bool
@@ -65,9 +65,9 @@ mut:
 	is_test                bool
 	stmt_start_pos         int
 	defer_stmts            []ast.DeferStmt
-	fn_decl                &ast.FnDecl // pointer to the FnDecl we are currently inside otherwise 0
+	fn_decl                &ast.FnDecl = unsafe { nil } // pointer to the FnDecl we are currently inside otherwise 0
 	generated_str_fns      []StrType
-	str_types              []StrType // types that need automatic str() generation
+	str_types              []StrType   // types that need automatic str() generation
 	copy_types             []StrType // types that need to be deep copied
 	generated_copy_fns     []StrType
 	array_fn_definitions   []string // array equality functions that have been defined
@@ -75,8 +75,8 @@ mut:
 	struct_fn_definitions  []string // struct equality functions that have been defined
 	sumtype_fn_definitions []string // sumtype equality functions that have been defined
 	alias_fn_definitions   []string // alias equality functions that have been defined
-	auto_fn_definitions    []string // auto generated functions defination list
-	anon_fn_definitions    []string // anon generated functions defination list
+	auto_fn_definitions    []string // auto generated functions definition list
+	anon_fn_definitions    []string // anon generated functions definition list
 	copy_fn_definitions    []string
 	method_fn_decls        map[string][]ast.FnDecl
 	builtin_fns            []string // Functions defined in `builtin`
@@ -84,7 +84,7 @@ mut:
 	cast_stack             []ast.Type
 	call_stack             []ast.CallExpr
 	is_vlines_enabled      bool // is it safe to generate #line directives when -g is passed
-	sourcemap              &sourcemap.SourceMap // maps lines in generated javascrip file to original source files and line
+	sourcemap              &sourcemap.SourceMap = unsafe { nil } // maps lines in generated javascrip file to original source files and line
 	comptime_var_type_map  map[string]ast.Type
 	defer_ifdef            string
 	cur_concrete_types     []ast.Type
@@ -152,9 +152,9 @@ pub fn gen(files []&ast.File, table &ast.Table, pref &pref.Preferences) string {
 		// builtin types
 		if g.file.mod.name == 'builtin' && !g.generated_builtin {
 			g.gen_builtin_type_defs()
-			g.writeln('Object.defineProperty(array.prototype,"len", { get: function() {return new int(this.arr.arr.length);}, set: function(l) { this.arr.arr.length = l.valueOf(); } }); ')
-			g.writeln('Object.defineProperty(map.prototype,"len", { get: function() {return new int(this.length);}, set: function(l) { } }); ')
-			g.writeln('Object.defineProperty(array.prototype,"length", { get: function() {return new int(this.arr.arr.length);}, set: function(l) { this.arr.arr.length = l.valueOf(); } }); ')
+			g.writeln('Object.defineProperty(array.prototype,"len", { get: function() { return new int(this.arr.arr.length);}, set: function(l) { this.arr.arr.length = l.valueOf(); } }); ')
+			g.writeln('Object.defineProperty(map.prototype,"len", { get: function() { return new int(this.length);}, set: function(l) { } }); ')
+			g.writeln('Object.defineProperty(array.prototype,"length", { get: function() { return new int(this.arr.arr.length);}, set: function(l) { this.arr.arr.length = l.valueOf(); } }); ')
 			g.generated_builtin = true
 		}
 		if g.is_test && !tests_inited {
@@ -284,7 +284,7 @@ pub fn gen(files []&ast.File, table &ast.Table, pref &pref.Preferences) string {
 	/*
 	if pref.is_shared {
 		// Export, through CommonJS, the module of the entry file if `-shared` was passed
-		export := nodes[nodes.len - 1].name
+		export := nodes.last().name
 		out += 'if (typeof module === "object" && module.exports) module.exports = $export;\n'
 	}*/
 	out += '\n'
@@ -1075,7 +1075,7 @@ struct UnsupportedAssertCtempTransform {
 
 const unsupported_ctemp_assert_transform = IError(UnsupportedAssertCtempTransform{})
 
-fn (mut g JsGen) assert_subexpression_to_ctemp(expr ast.Expr, expr_type ast.Type) ?ast.Expr {
+fn (mut g JsGen) assert_subexpression_to_ctemp(expr ast.Expr, expr_type ast.Type) !ast.Expr {
 	match expr {
 		ast.CallExpr {
 			return g.new_ctemp_var_then_gen(expr, expr_type)
@@ -2431,7 +2431,7 @@ fn (mut g JsGen) match_expr(node ast.MatchExpr) {
 	}
 
 	if node.cond in [ast.Ident, ast.SelectorExpr, ast.IntegerLiteral, ast.StringLiteral, ast.FloatLiteral,
-		ast.CallExpr, ast.EnumVal] {
+		ast.BoolLiteral, ast.CallExpr, ast.EnumVal] {
 		cond_var = CondExpr{node.cond}
 	} else {
 		s := g.new_tmp_var()
@@ -3584,7 +3584,7 @@ fn (mut g JsGen) gen_type_cast_expr(it ast.CastExpr) {
 		return
 	}
 	if g.cast_stack.len > 0 && is_literal {
-		if it.typ == g.cast_stack[g.cast_stack.len - 1] {
+		if it.typ == g.cast_stack.last() {
 			g.expr(it.expr)
 			return
 		}
@@ -3619,7 +3619,7 @@ fn (mut g JsGen) gen_integer_literal_expr(it ast.IntegerLiteral) {
 	// Don't wrap integers for use in JS.foo functions.
 	// TODO: call.language always seems to be "v", parser bug?
 	if g.call_stack.len > 0 {
-		call := g.call_stack[g.call_stack.len - 1]
+		call := g.call_stack.last()
 		if call.language == .js {
 			for t in call.args {
 				if t.expr is ast.IntegerLiteral {
@@ -3634,7 +3634,7 @@ fn (mut g JsGen) gen_integer_literal_expr(it ast.IntegerLiteral) {
 
 	// Skip cast if type is the same as the parrent caster
 	if g.cast_stack.len > 0 {
-		if g.cast_stack[g.cast_stack.len - 1] in ast.integer_type_idxs {
+		if g.cast_stack.last() in ast.integer_type_idxs {
 			g.write('new ')
 
 			g.write('int($it.val)')
@@ -3652,7 +3652,7 @@ fn (mut g JsGen) gen_float_literal_expr(it ast.FloatLiteral) {
 	// Don't wrap integers for use in JS.foo functions.
 	// TODO: call.language always seems to be "v", parser bug?
 	if g.call_stack.len > 0 {
-		call := g.call_stack[g.call_stack.len - 1]
+		call := g.call_stack.last()
 		if call.language == .js {
 			for i, t in call.args {
 				if t.expr is ast.FloatLiteral {
@@ -3671,10 +3671,10 @@ fn (mut g JsGen) gen_float_literal_expr(it ast.FloatLiteral) {
 
 	// Skip cast if type is the same as the parrent caster
 	if g.cast_stack.len > 0 {
-		if g.cast_stack[g.cast_stack.len - 1] in ast.float_type_idxs {
+		if g.cast_stack.last() in ast.float_type_idxs {
 			g.write('new f32($it.val)')
 			return
-		} else if g.cast_stack[g.cast_stack.len - 1] in ast.integer_type_idxs {
+		} else if g.cast_stack.last() in ast.integer_type_idxs {
 			g.write(int(it.val.f64()).str())
 			return
 		}

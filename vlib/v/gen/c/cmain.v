@@ -69,6 +69,20 @@ fn (mut g Gen) gen_c_main_function_only_header() {
 			g.writeln('\tcmd_line_to_argv CommandLineToArgvW = (cmd_line_to_argv)GetProcAddress(shell32_module, "CommandLineToArgvW");')
 			g.writeln('\tint ___argc;')
 			g.writeln('\twchar_t** ___argv = CommandLineToArgvW(full_cmd_line, &___argc);')
+
+			g.writeln('BOOL con_valid = FALSE;')
+			if g.force_main_console {
+				g.writeln('con_valid = AllocConsole();')
+			} else {
+				g.writeln('con_valid = AttachConsole(ATTACH_PARENT_PROCESS);')
+			}
+			g.writeln('if (con_valid) {')
+			g.writeln('\tFILE* res_fp = 0;')
+			g.writeln('\terrno_t err;')
+			g.writeln('\terr = freopen_s(&res_fp, "CON", "w", stdout);')
+			g.writeln('\terr = freopen_s(&res_fp, "CON", "w", stderr);')
+			g.writeln('\t(void)err;')
+			g.writeln('}')
 			return
 		}
 		// Console application
@@ -80,6 +94,7 @@ fn (mut g Gen) gen_c_main_function_only_header() {
 
 fn (mut g Gen) gen_c_main_function_header() {
 	g.gen_c_main_function_only_header()
+	g.gen_c_main_trace_calls_hook()
 	g.writeln('\tg_main_argc = ___argc;')
 	g.writeln('\tg_main_argv = ___argv;')
 	if g.nr_closures > 0 {
@@ -139,6 +154,7 @@ void (_vsokol_cleanup_userdata_cb)(void* user_data) {
 	g.writeln('// The sokol_main entry point on Android
 sapp_desc sokol_main(int argc, char* argv[]) {
 	(void)argc; (void)argv;')
+	g.gen_c_main_trace_calls_hook()
 
 	if g.pref.gc_mode in [.boehm_full, .boehm_incr, .boehm_full_opt, .boehm_incr_opt, .boehm_leak] {
 		g.writeln('#if defined(_VGCBOEHM)')
@@ -319,4 +335,11 @@ pub fn (mut g Gen) filter_only_matching_fn_names(fnames []string) []string {
 		res << tname
 	}
 	return res
+}
+
+pub fn (mut g Gen) gen_c_main_trace_calls_hook() {
+	if !g.pref.trace_calls {
+		return
+	}
+	g.writeln('\tu8 bottom_of_stack = 0; g_stack_base = &bottom_of_stack; v__trace_calls__on_c_main();')
 }

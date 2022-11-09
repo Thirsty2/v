@@ -3,7 +3,6 @@
 // that can be found in the LICENSE file.
 module eval
 
-import os
 import v.ast
 import v.pref
 import v.util
@@ -19,9 +18,9 @@ pub fn new_eval(table &ast.Table, pref &pref.Preferences) Eval {
 type Symbol = Object | ast.EmptyStmt | ast.FnDecl
 
 pub struct Eval {
-	pref &pref.Preferences
+	pref &pref.Preferences = unsafe { nil }
 pub mut:
-	table                  &ast.Table
+	table                  &ast.Table = unsafe { nil }
 	mods                   map[string]map[string]Symbol
 	future_register_consts map[string]map[string]map[string]ast.ConstField // mod:file:name:field
 	local_vars             map[string]Var
@@ -231,8 +230,9 @@ fn (e Eval) error(msg string) {
 }
 
 fn (e Eval) panic(s string) {
+	commithash := unsafe { tos5(&char(C.V_CURRENT_COMMIT_HASH)) }
 	eprintln('V panic: $s')
-	eprintln('V hash: ${@VHASH}')
+	eprintln('V hash: $commithash')
 	e.print_backtrace()
 	exit(1)
 }
@@ -241,7 +241,7 @@ fn (e Eval) print_backtrace() {
 	for i := e.back_trace.len - 1; i >= 0; i-- {
 		t := e.back_trace[i]
 		file_path := if path := e.trace_file_paths[t.file_idx] {
-			os.real_path(path)
+			util.path_styled_for_error_messages(path)
 		} else {
 			t.file_idx.str()
 		}

@@ -107,13 +107,15 @@ fn (kind OrderType) to_str() string {
 // => fields[abc, b]; data[3, 'test']; types[index of int, index of string]; kinds[.eq, .eq]; is_and[true];
 // Every field, data, type & kind of operation in the expr share the same index in the arrays
 // is_and defines how they're addicted to each other either and or or
+// parentheses defines which fields will be inside ()
 pub struct QueryData {
 pub:
-	fields []string
-	data   []Primitive
-	types  []int
-	kinds  []OperationKind
-	is_and []bool
+	fields      []string
+	data        []Primitive
+	types       []int
+	parentheses [][]int
+	kinds       []OperationKind
+	is_and      []bool
 }
 
 pub struct InfixType {
@@ -168,12 +170,12 @@ pub:
 // Every function without last_id() returns an optional, which returns an error if present
 // last_id returns the last inserted id of the db
 pub interface Connection {
-	@select(config SelectConfig, data QueryData, where QueryData) ?[][]Primitive
-	insert(table string, data QueryData) ?
-	update(table string, data QueryData, where QueryData) ?
-	delete(table string, where QueryData) ?
-	create(table string, fields []TableField) ?
-	drop(table string) ?
+	@select(config SelectConfig, data QueryData, where QueryData) ![][]Primitive
+	insert(table string, data QueryData) !
+	update(table string, data QueryData, where QueryData) !
+	delete(table string, where QueryData) !
+	create(table string, fields []TableField) !
+	drop(table string) !
 	last_id() Primitive
 }
 
@@ -266,10 +268,24 @@ pub fn orm_stmt_gen(table string, q string, kind StmtKind, num bool, qm string, 
 	}
 	if kind == .update || kind == .delete {
 		for i, field in where.fields {
+			mut pre_par := false
+			mut post_par := false
+			for par in where.parentheses {
+				if i in par {
+					pre_par = par[0] == i
+					post_par = par[1] == i
+				}
+			}
+			if pre_par {
+				str += '('
+			}
 			str += '$q$field$q ${where.kinds[i].to_str()} $qm'
 			if num {
 				str += '$c'
 				c++
+			}
+			if post_par {
+				str += ')'
 			}
 			if i < where.fields.len - 1 {
 				str += ' AND '
@@ -311,10 +327,24 @@ pub fn orm_select_gen(orm SelectConfig, q string, num bool, qm string, start_pos
 	if orm.has_where {
 		str += ' WHERE '
 		for i, field in where.fields {
+			mut pre_par := false
+			mut post_par := false
+			for par in where.parentheses {
+				if i in par {
+					pre_par = par[0] == i
+					post_par = par[1] == i
+				}
+			}
+			if pre_par {
+				str += '('
+			}
 			str += '$q$field$q ${where.kinds[i].to_str()} $qm'
 			if num {
 				str += '$c'
 				c++
+			}
+			if post_par {
+				str += ')'
 			}
 			if i < where.fields.len - 1 {
 				if where.is_and[i] {
@@ -362,7 +392,7 @@ pub fn orm_select_gen(orm SelectConfig, q string, num bool, qm string, start_pos
 // fields - See TableField
 // sql_from_v - Function which maps type indices to sql type names
 // alternative - Needed for msdb
-pub fn orm_table_gen(table string, q string, defaults bool, def_unique_len int, fields []TableField, sql_from_v fn (int) ?string, alternative bool) ?string {
+pub fn orm_table_gen(table string, q string, defaults bool, def_unique_len int, fields []TableField, sql_from_v fn (int) !string, alternative bool) !string {
 	mut str := 'CREATE TABLE IF NOT EXISTS $q$table$q ('
 
 	if alternative {
@@ -386,7 +416,7 @@ pub fn orm_table_gen(table string, q string, defaults bool, def_unique_len int, 
 		mut field_name := sql_field_name(field)
 		mut ctyp := sql_from_v(sql_field_type(field)) or {
 			field_name = '${field_name}_id'
-			sql_from_v(7)?
+			sql_from_v(7)!
 		}
 		for attr in field.attrs {
 			match attr.name {

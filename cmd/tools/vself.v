@@ -8,6 +8,12 @@ import v.util.recompilation
 const is_debug = os.args.contains('-debug')
 
 fn main() {
+	// make testing `v up` easier, by providing a way to force `v self` to fail,
+	// to test the fallback logic:
+	if os.getenv('VSELF_SHOULD_FAIL') != '' {
+		eprintln('v self failed')
+		exit(1)
+	}
 	// support a renamed `v` executable too:
 	vexe := pref.vexe_path()
 	vroot := os.dir(vexe)
@@ -15,7 +21,7 @@ fn main() {
 	short_v_name := vexe_name.all_before('.')
 	//
 	recompilation.must_be_enabled(vroot, 'Please install V from source, to use `$vexe_name self` .')
-	os.chdir(vroot)?
+	os.chdir(vroot)!
 	os.setenv('VCOLORS', 'always', true)
 	args := os.args[1..].filter(it != 'self')
 	jargs := args.join(' ')
@@ -60,7 +66,7 @@ fn list_folder(short_v_name string, bmessage string, message string) {
 	println(message)
 }
 
-fn backup_old_version_and_rename_newer(short_v_name string) ?bool {
+fn backup_old_version_and_rename_newer(short_v_name string) !bool {
 	mut errors := []string{}
 	short_v_file := if os.user_os() == 'windows' { '${short_v_name}.exe' } else { '$short_v_name' }
 	short_v2_file := if os.user_os() == 'windows' { 'v2.exe' } else { 'v2' }

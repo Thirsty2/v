@@ -37,7 +37,7 @@ pub mut:
 	f_size_of_struct u32
 	f_key            voidptr
 	f_line_number    u32
-	f_file_name      &u8
+	f_file_name      &u8 = unsafe { nil }
 	f_address        u64
 }
 
@@ -63,7 +63,7 @@ const (
 	symopt_load_lines            = 0x00000010
 	symopt_include_32bit_modules = 0x00002000
 	symopt_allow_zero_address    = 0x01000000
-	symopt_debug                 = 0x80000000
+	symopt_debug                 = u32(0x80000000)
 )
 
 // g_original_codepage - used to restore the original windows console code page when exiting
@@ -214,7 +214,7 @@ pub:
 	// status_ constants
 	code        u32
 	flags       u32
-	record      &ExceptionRecord
+	record      &ExceptionRecord = unsafe { nil }
 	address     voidptr
 	param_count u32
 	// params []voidptr
@@ -226,8 +226,8 @@ struct ContextRecord {
 
 struct ExceptionPointers {
 pub:
-	exception_record &ExceptionRecord
-	context_record   &ContextRecord
+	exception_record &ExceptionRecord = unsafe { nil }
+	context_record   &ContextRecord   = unsafe { nil }
 }
 
 type VectoredExceptionHandler = fn (&ExceptionPointers) int

@@ -6,22 +6,28 @@ import time
 const (
 	vexe                   = os.getenv('VEXE')
 	vroot                  = os.dir(vexe)
-	test_os_process        = os.join_path(os.temp_dir(), 'v', 'test_os_process.exe')
+	tfolder                = os.join_path(os.vtmp_dir(), 'v', 'tests', 'os_process')
+	test_os_process        = os.join_path(tfolder, 'test_os_process.exe')
 	test_os_process_source = os.join_path(vroot, 'cmd/tools/test_os_process.v')
 )
 
-fn testsuite_begin() ? {
-	os.rm(test_os_process) or {}
+fn testsuite_begin() {
+	os.rmdir_all(tfolder) or {}
+	os.mkdir_all(tfolder)!
 	if os.getenv('WINE_TEST_OS_PROCESS_EXE') != '' {
 		// Make it easier to run the test under wine emulation, by just
 		// prebuilding the executable with:
 		//   v -os windows -o x.exe cmd/tools/test_os_process.v
 		//   WINE_TEST_OS_PROCESS_EXE=x.exe ./v -os windows vlib/os/process_test.v
-		os.cp(os.getenv('WINE_TEST_OS_PROCESS_EXE'), test_os_process)?
+		os.cp(os.getenv('WINE_TEST_OS_PROCESS_EXE'), test_os_process)!
 	} else {
 		os.system('${os.quoted_path(vexe)} -o ${os.quoted_path(test_os_process)} ${os.quoted_path(test_os_process_source)}')
 	}
 	assert os.exists(test_os_process)
+}
+
+fn testsuite_end() {
+	os.rmdir_all(tfolder) or {}
 }
 
 fn test_getpid() {

@@ -2,7 +2,7 @@ module cli
 
 import term
 
-type FnCommandCallback = fn (cmd Command) ?
+type FnCommandCallback = fn (cmd Command) !
 
 // str returns the `string` representation of the callback.
 pub fn (f FnCommandCallback) str() string {
@@ -27,7 +27,7 @@ pub mut:
 	disable_flags   bool
 	sort_flags      bool
 	sort_commands   bool
-	parent          &Command = unsafe { 0 }
+	parent          &Command = unsafe { nil }
 	commands        []Command
 	flags           []Flag
 	required_args   int
@@ -311,7 +311,7 @@ pub fn (cmd Command) execute_man() {
 	}
 }
 
-fn (cmds []Command) get(name string) ?Command {
+fn (cmds []Command) get(name string) !Command {
 	for cmd in cmds {
 		if cmd.name == name {
 			return cmd

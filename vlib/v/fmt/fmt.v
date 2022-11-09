@@ -7,6 +7,7 @@ import strings
 import v.ast
 import v.util
 import v.pref
+import v.checker.constants
 
 const (
 	bs      = '\\'
@@ -18,8 +19,8 @@ const (
 pub struct Fmt {
 pub mut:
 	file               ast.File
-	table              &ast.Table
-	pref               &pref.Preferences
+	table              &ast.Table        = unsafe { nil }
+	pref               &pref.Preferences = unsafe { nil }
 	is_debug           bool
 	out                strings.Builder
 	out_imports        strings.Builder
@@ -50,9 +51,16 @@ pub mut:
 	is_mbranch_expr    bool // match a { x...y { } }
 	fn_scope           &ast.Scope = unsafe { nil }
 	wsinfix_depth      int
+	format_state       FormatState
+	source_text        string // can be set by `echo "println('hi')" | v fmt`, i.e. when processing source not from a file, but from stdin. In this case, it will contain the entire input text. You can use f.file.path otherwise, and read from that file.
 }
 
-pub fn fmt(file ast.File, table &ast.Table, pref &pref.Preferences, is_debug bool) string {
+[params]
+pub struct FmtOptions {
+	source_text string
+}
+
+pub fn fmt(file ast.File, table &ast.Table, pref &pref.Preferences, is_debug bool, options FmtOptions) string {
 	mut f := Fmt{
 		file: file
 		table: table
@@ -61,6 +69,7 @@ pub fn fmt(file ast.File, table &ast.Table, pref &pref.Preferences, is_debug boo
 		out: strings.new_builder(1000)
 		out_imports: strings.new_builder(200)
 	}
+	f.source_text = options.source_text
 	f.process_file_imports(file)
 	f.set_current_module_name('main')
 	// As these are toplevel stmts, the indent increase done in f.stmts() has to be compensated
@@ -132,7 +141,7 @@ pub fn (mut f Fmt) wrap_long_line(penalty_idx int, add_indent bool) bool {
 	if penalty_idx > 0 && f.line_len <= fmt.max_len[penalty_idx] {
 		return false
 	}
-	if f.out[f.out.len - 1] == ` ` {
+	if f.out.last() == ` ` {
 		f.out.go_back(1)
 	}
 	f.write('\n')
@@ -152,7 +161,8 @@ pub struct RemoveNewLineConfig {
 	imports_buffer bool // Work on f.out_imports instead of f.out
 }
 
-pub fn (mut f Fmt) remove_new_line(cfg RemoveNewLineConfig) {
+// When the removal action actually occurs, the string of the last line after the removal is returned
+pub fn (mut f Fmt) remove_new_line(cfg RemoveNewLineConfig) string {
 	mut buffer := if cfg.imports_buffer { unsafe { &f.out_imports } } else { unsafe { &f.out } }
 	mut i := 0
 	for i = buffer.len - 1; i >= 0; i-- {
@@ -160,8 +170,23 @@ pub fn (mut f Fmt) remove_new_line(cfg RemoveNewLineConfig) {
 			break
 		}
 	}
+	if i == buffer.len - 1 {
+		return ''
+	}
 	buffer.go_back(buffer.len - i - 1)
 	f.empty_line = false
+	mut line_len := 0
+	mut last_line_str := []u8{}
+	for i = buffer.len - 1; i >= 0; i-- {
+		ch := buffer.byte_at(i)
+		if ch == `\n` {
+			break
+		}
+		line_len += if ch == `\t` { 4 } else { 1 }
+		last_line_str << ch
+	}
+	f.line_len = line_len
+	return last_line_str.reverse().bytestr()
 }
 
 //=== Specialized write methods ===//
@@ -239,7 +264,7 @@ pub fn (mut f Fmt) short_module(name string) string {
 	}
 	idx := vals.len - 1
 	mname, tprefix := f.get_modname_prefix(vals[..idx].join('.'))
-	symname := vals[vals.len - 1]
+	symname := vals.last()
 	mut aname := f.mod2alias[mname]
 	if aname == '' {
 		for _, v in f.mod2alias {
@@ -312,9 +337,18 @@ pub fn (mut f Fmt) imports(imports []ast.Import) {
 			continue
 		}
 		already_imported[import_text] = true
-		f.out_imports.writeln(import_text)
-		f.import_comments(imp.comments, inline: true)
-		f.import_comments(imp.next_comments)
+
+		if !f.format_state.is_vfmt_on {
+			import_original_source_lines := f.get_source_lines()#[imp.pos.line_nr..
+				imp.pos.last_line + 1].join('\n')
+			f.out_imports.writeln(import_original_source_lines)
+			// NOTE: imp.comments are on the *same line*, so they are already included in import_original_source_lines
+			f.import_comments(imp.next_comments)
+		} else {
+			f.out_imports.writeln(import_text)
+			f.import_comments(imp.comments, inline: true)
+			f.import_comments(imp.next_comments)
+		}
 		num_imports++
 	}
 	if num_imports > 0 {
@@ -425,7 +459,7 @@ pub fn (mut f Fmt) stmts(stmts []ast.Stmt) {
 
 pub fn (mut f Fmt) stmt(node ast.Stmt) {
 	if f.is_debug {
-		eprintln('stmt: ${node.pos:-42} | node: ${node.type_name():-20}')
+		eprintln('stmt ${node.type_name():-20} | pos: $node.pos.line_str()')
 	}
 	match node {
 		ast.EmptyStmt, ast.NodeError {}
@@ -528,7 +562,7 @@ fn stmt_is_single_line(stmt ast.Stmt) bool {
 pub fn (mut f Fmt) expr(node_ ast.Expr) {
 	mut node := unsafe { node_ }
 	if f.is_debug {
-		eprintln('expr: ${node.pos():-42} | node: ${node.type_name():-20} | $node.str()')
+		eprintln('expr ${node.type_name():-20} | pos: $node.pos().line_str() | $node.str()')
 	}
 	match mut node {
 		ast.NodeError {}
@@ -922,7 +956,11 @@ pub fn (mut f Fmt) enum_decl(node ast.EnumDecl) {
 	if node.is_pub {
 		f.write('pub ')
 	}
-	name := node.name.after('.')
+	mut name := node.name.after('.')
+	if node.typ != ast.int_type {
+		senum_type := f.table.type_to_str_using_aliases(node.typ, f.mod2alias)
+		name += ' as $senum_type'
+	}
 	if node.fields.len == 0 && node.pos.line_nr == node.pos.last_line {
 		f.writeln('enum $name {}\n')
 		return
@@ -1008,6 +1046,9 @@ pub fn (mut f Fmt) for_c_stmt(node ast.ForCStmt) {
 	if node.label.len > 0 {
 		f.write('$node.label: ')
 	}
+	if node.comments.len > 0 {
+		f.comments(node.comments)
+	}
 	f.write('for ')
 	if node.has_init {
 		f.single_line_if = true // to keep all for ;; exprs on the same line
@@ -1030,6 +1071,9 @@ pub fn (mut f Fmt) for_c_stmt(node ast.ForCStmt) {
 pub fn (mut f Fmt) for_in_stmt(node ast.ForInStmt) {
 	if node.label.len > 0 {
 		f.write('$node.label: ')
+	}
+	if node.comments.len > 0 {
+		f.comments(node.comments)
 	}
 	f.write('for ')
 	if node.key_var != '' {
@@ -1061,6 +1105,9 @@ pub fn (mut f Fmt) for_in_stmt(node ast.ForInStmt) {
 pub fn (mut f Fmt) for_stmt(node ast.ForStmt) {
 	if node.label.len > 0 {
 		f.write('$node.label: ')
+	}
+	if node.comments.len > 0 {
+		f.comments(node.comments)
 	}
 	f.write('for ')
 	f.expr(node.cond)
@@ -1098,6 +1145,9 @@ pub fn (mut f Fmt) global_decl(node ast.GlobalDecl) {
 	}
 	for field in node.fields {
 		f.comments(field.comments, inline: true)
+		if field.is_volatile {
+			f.write('volatile ')
+		}
 		f.write('$field.name ')
 		f.write(strings.repeat(` `, max - field.name.len))
 		if field.has_expr {
@@ -1121,7 +1171,7 @@ pub fn (mut f Fmt) global_decl(node ast.GlobalDecl) {
 }
 
 pub fn (mut f Fmt) go_expr(node ast.GoExpr) {
-	f.write('go ')
+	f.write('spawn ')
 	f.call_expr(node.call_expr)
 }
 
@@ -1635,7 +1685,7 @@ pub fn (mut f Fmt) array_init(node ast.ArrayInit) {
 		}
 		f.write(f.table.type_to_str_using_aliases(node.elem_type, f.mod2alias))
 		if node.has_default {
-			f.write('{init: ')
+			f.write('\{init: ')
 			f.expr(node.default_expr)
 			f.write('}')
 		} else {
@@ -1840,6 +1890,8 @@ pub fn (mut f Fmt) comptime_call(node ast.ComptimeCall) {
 			f.write("\$env('$node.args_var')")
 		} else if node.is_pkgconfig {
 			f.write("\$pkgconfig('$node.args_var')")
+		} else if node.method_name == 'compile_error' {
+			f.write("\$compile_error('$node.args_var')")
 		} else {
 			inner_args := if node.args_var != '' {
 				node.args_var
@@ -1885,6 +1937,10 @@ pub fn (mut f Fmt) enum_val(node ast.EnumVal) {
 
 pub fn (mut f Fmt) ident(node ast.Ident) {
 	if node.info is ast.IdentVar {
+		if node.comptime && node.name in constants.valid_comptime_not_user_defined {
+			f.write(node.name)
+			return
+		}
 		if node.info.is_mut {
 			f.write(node.info.share.str() + ' ')
 		}
@@ -1903,7 +1959,7 @@ pub fn (mut f Fmt) ident(node ast.Ident) {
 		f.write('_')
 	} else {
 		mut is_local := false
-		if !isnil(f.fn_scope) {
+		if f.fn_scope != unsafe { nil } {
 			if _ := f.fn_scope.find_var(node.name) {
 				is_local = true
 			}
@@ -1921,7 +1977,7 @@ pub fn (mut f Fmt) ident(node ast.Ident) {
 					// "v.fmt.foo" => "fmt.foo"
 					vals := full_name.split('.')
 					mod_prefix := vals[vals.len - 2]
-					const_name := vals[vals.len - 1]
+					const_name := vals.last()
 					if mod_prefix == 'main' {
 						f.write(const_name)
 						return
@@ -2169,10 +2225,17 @@ fn (mut f Fmt) write_splitted_infix(conditions []string, penalties []int, ignore
 				f.write_splitted_infix(conds, pens, true, is_cond)
 				continue
 			}
+			mut is_wrap_needed := true
 			if i == 0 {
-				f.remove_new_line()
+				last_line_str := f.remove_new_line().trim_space()
+				if last_line_str in ['if', 'for'] {
+					f.write(' ')
+					is_wrap_needed = false
+				}
 			}
-			f.writeln('')
+			if is_wrap_needed {
+				f.writeln('')
+			}
 			f.indent++
 			f.write(c)
 			f.indent--
@@ -2202,7 +2265,10 @@ pub fn (mut f Fmt) lock_expr(node ast.LockExpr) {
 		}
 	}
 	if num_locked > 0 || num_rlocked == 0 {
-		f.write('lock ')
+		f.write('lock')
+		if num_locked > 0 {
+			f.write(' ')
+		}
 		mut n := 0
 		for i, v in node.lockeds {
 			if !node.is_rlock[i] {
@@ -2264,17 +2330,12 @@ pub fn (mut f Fmt) map_init(node ast.MapInit) {
 			max_field_len = skey.len
 		}
 	}
-	for i, key in node.keys {
+	for i, _ in node.keys {
 		skey := skeys[i]
 		f.write(skey)
 		f.write(': ')
 		f.write(strings.repeat(` `, max_field_len - skey.len))
 		f.expr(node.vals[i])
-		if key is ast.EnumVal && skey.starts_with('.') {
-			// enforce the use of `,` for maps with short enum keys, otherwise there is ambiguity
-			// when the values are struct values, and the code will no longer parse properly
-			f.write(',')
-		}
 		f.comments(node.comments[i], prev_line: node.vals[i].pos().last_line, has_nl: false)
 		f.writeln('')
 	}
@@ -2591,18 +2652,14 @@ pub fn (mut f Fmt) char_literal(node ast.CharLiteral) {
 }
 
 pub fn (mut f Fmt) string_literal(node ast.StringLiteral) {
-	use_double_quote := node.val.contains("'") && !node.val.contains('"')
+	quote := if node.val.contains("'") && !node.val.contains('"') { '"' } else { "'" }
 	if node.is_raw {
 		f.write('r')
 	} else if node.language == ast.Language.c {
 		f.write('c')
 	}
 	if node.is_raw {
-		if use_double_quote {
-			f.write('"$node.val"')
-		} else {
-			f.write("'$node.val'")
-		}
+		f.write('$quote$node.val$quote')
 	} else {
 		unescaped_val := node.val.replace('$fmt.bs$fmt.bs', '\x01').replace_each([
 			"$fmt.bs'",
@@ -2610,13 +2667,8 @@ pub fn (mut f Fmt) string_literal(node ast.StringLiteral) {
 			'$fmt.bs"',
 			'"',
 		])
-		if use_double_quote {
-			s := unescaped_val.replace_each(['\x01', '$fmt.bs$fmt.bs', '"', '$fmt.bs"'])
-			f.write('"$s"')
-		} else {
-			s := unescaped_val.replace_each(['\x01', '$fmt.bs$fmt.bs', "'", "$fmt.bs'"])
-			f.write("'$s'")
-		}
+		s := unescaped_val.replace_each(['\x01', '$fmt.bs$fmt.bs', quote, '$fmt.bs$quote'])
+		f.write('$quote$s$quote')
 	}
 }
 
@@ -2643,11 +2695,20 @@ pub fn (mut f Fmt) string_inter_literal(node ast.StringInterLiteral) {
 	//	work too different for the various exprs that are interpolated
 	f.write(quote)
 	for i, val in node.vals {
-		f.write(val)
+		unescaped_val := val.replace('$fmt.bs$fmt.bs', '\x01').replace_each([
+			"$fmt.bs'",
+			"'",
+			'$fmt.bs"',
+			'"',
+		])
+		s := unescaped_val.replace_each(['\x01', '$fmt.bs$fmt.bs', quote, '$fmt.bs$quote'])
+		f.write('$s')
 		if i >= node.exprs.len {
 			break
 		}
-		f.write('$')
+		if node.has_dollar[i] {
+			f.write('$')
+		}
 		fspec_str, needs_braces := node.get_fspec_braces(i)
 		if needs_braces {
 			f.write('{')

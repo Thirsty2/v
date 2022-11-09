@@ -10,7 +10,7 @@ mut:
 
 fn (mut s StringReader) read(mut buf []u8) !int {
 	if s.place >= s.text.len {
-		return IError(io.Eof{})
+		return io.Eof{}
 	}
 	max_bytes := 100
 	end := if s.place + max_bytes >= s.text.len { s.text.len } else { s.place + max_bytes }
@@ -95,8 +95,8 @@ fn test_parse_form() {
 		'a': 'b'
 		'c': ' d '
 	}
-	assert parse_form('{json}') == {
-		'json': '{json}'
+	assert parse_form(r'{json}') == {
+		'json': r'{json}'
 	}
 	assert parse_form('{
     "_id": "76c",
@@ -174,11 +174,11 @@ fn test_multipart_form_body() {
 	assert parsed_form == form
 }
 
-fn test_parse_large_body() ? {
+fn test_parse_large_body() {
 	body := 'A'.repeat(101) // greater than max_bytes
 	req := 'GET / HTTP/1.1\r\nContent-Length: $body.len\r\n\r\n$body'
 	mut reader_ := reader(req)
-	result := parse_request(mut reader_)?
+	result := parse_request(mut reader_)!
 	assert result.data.len == body.len
 	assert result.data == body
 }

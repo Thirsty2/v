@@ -8,6 +8,7 @@ import time
 import v.pref
 import v.vmod
 import v.util.recompilation
+import runtime
 
 // math.bits is needed by strconv.ftoa
 pub const (
@@ -37,6 +38,8 @@ const (
 	]
 )
 
+pub const nr_jobs = runtime.nr_jobs()
+
 pub fn module_is_builtin(mod string) bool {
 	return mod in util.builtin_module_parts
 }
@@ -59,7 +62,7 @@ pub fn set_vroot_folder(vroot_path string) {
 	os.setenv('VCHILD', 'true', true)
 }
 
-pub fn resolve_vmodroot(str string, dir string) ?string {
+pub fn resolve_vmodroot(str string, dir string) !string {
 	mut mcache := vmod.get_cache()
 	vmod_file_location := mcache.get_by_folder(dir)
 	if vmod_file_location.vmod_file.len == 0 {
@@ -72,7 +75,7 @@ pub fn resolve_vmodroot(str string, dir string) ?string {
 
 // resolve_env_value replaces all occurrences of `$env('ENV_VAR_NAME')`
 // in `str` with the value of the env variable `$ENV_VAR_NAME`.
-pub fn resolve_env_value(str string, check_for_presence bool) ?string {
+pub fn resolve_env_value(str string, check_for_presence bool) !string {
 	env_ident := "\$env('"
 	at := str.index(env_ident) or {
 		return error('no "$env_ident' + '...\')" could be found in "$str".')
@@ -293,9 +296,9 @@ mut:
 }
 
 [unsafe]
-pub fn cached_read_source_file(path string) ?string {
+pub fn cached_read_source_file(path string) !string {
 	mut static cache := &SourceCache(0)
-	if isnil(cache) {
+	if cache == unsafe { nil } {
 		cache = &SourceCache{}
 	}
 
@@ -363,7 +366,7 @@ fn non_empty(arg []string) []string {
 	return arg.filter(it != '')
 }
 
-pub fn check_module_is_installed(modulename string, is_verbose bool) ?bool {
+pub fn check_module_is_installed(modulename string, is_verbose bool) !bool {
 	mpath := os.join_path_single(os.vmodules_dir(), modulename)
 	mod_v_file := os.join_path_single(mpath, 'v.mod')
 	murl := 'https://github.com/vlang/$modulename'
@@ -485,18 +488,10 @@ pub fn recompile_file(vexe string, file string) {
 	}
 }
 
+// get_vtmp_folder returns the path to a folder, that is writable to V programs,
+// and specific to the user. It can be overriden by setting the env variable `VTMP`.
 pub fn get_vtmp_folder() string {
-	mut vtmp := os.getenv('VTMP')
-	if vtmp.len > 0 {
-		return vtmp
-	}
-	uid := os.getuid()
-	vtmp = os.join_path_single(os.temp_dir(), 'v_$uid')
-	if !os.exists(vtmp) || !os.is_dir(vtmp) {
-		os.mkdir_all(vtmp, mode: 0o700) or { panic(err) } // keep directory private
-	}
-	os.setenv('VTMP', vtmp, true)
-	return vtmp
+	return os.vtmp_dir()
 }
 
 pub fn should_bundle_module(mod string) bool {
@@ -507,7 +502,7 @@ pub fn should_bundle_module(mod string) bool {
 // find_all_v_files - given a list of files/folders, finds all .v/.vsh files
 // if some of the files/folders on the list does not exist, or a file is not
 // a .v or .vsh file, returns an error instead.
-pub fn find_all_v_files(roots []string) ?[]string {
+pub fn find_all_v_files(roots []string) ![]string {
 	mut files := []string{}
 	for file in roots {
 		if os.is_dir(file) {
@@ -536,6 +531,6 @@ pub fn free_caches() {
 	}
 }
 
-pub fn read_file(file_path string) ?string {
+pub fn read_file(file_path string) !string {
 	return unsafe { cached_read_source_file(file_path) }
 }

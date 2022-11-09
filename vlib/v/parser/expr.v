@@ -16,7 +16,7 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 	}
 }
 
-pub fn (mut p Parser) check_expr(precedence int) ?ast.Expr {
+pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 	p.trace_parser('expr($precedence)')
 	mut node := ast.empty_expr
 	is_stmt_ident := p.is_stmt_ident
@@ -114,7 +114,7 @@ pub fn (mut p Parser) check_expr(precedence int) ?ast.Expr {
 				node = p.prefix_expr()
 			}
 		}
-		.key_go {
+		.key_go, .key_spawn {
 			mut go_expr := p.go_expr()
 			go_expr.is_expr = true
 			node = go_expr
@@ -363,7 +363,7 @@ pub fn (mut p Parser) check_expr(precedence int) ?ast.Expr {
 			}
 			if p.tok.kind != .eof && !(p.tok.kind == .rsbr && p.inside_asm) {
 				// eof should be handled where it happens
-				return none
+				return error('none')
 				// return p.unexpected(prepend_msg: 'invalid expression: ')
 			}
 		}
@@ -387,13 +387,11 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 	}
 	// Infix
 	for precedence < p.tok.precedence() {
-		if p.tok.kind == .dot { //&& (p.tok.line_nr == p.prev_tok.line_nr
-			// TODO fix a bug with prev_tok.last_line
-			//|| p.prev_tok.pos().last_line == p.tok.line_nr) {
-			// if p.fileis('vcache.v') {
-			// p.warn('tok.line_nr = $p.tok.line_nr; prev_tok.line_nr=$p.prev_tok.line_nr;
-			// prev_tok.last_line=$p.prev_tok.pos().last_line')
-			//}
+		if p.tok.kind == .dot {
+			// no spaces or line break before dot in map_init
+			if p.inside_map_init && p.tok.pos - p.prev_tok.pos > p.prev_tok.len {
+				return node
+			}
 			node = p.dot_expr(node)
 			if p.name_error {
 				return node

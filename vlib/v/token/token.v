@@ -46,7 +46,8 @@ pub enum Kind {
 	hash // #
 	dollar // $
 	at // @
-	str_dollar
+	str_dollar // ${} or $, old interpolation
+	str_lcbr // {interpolation
 	left_shift // <<
 	right_shift // >>
 	unsigned_right_shift // >>>
@@ -131,6 +132,7 @@ pub enum Kind {
 	key_static
 	key_volatile
 	key_unsafe
+	key_spawn
 	keyword_end
 	_end_
 }
@@ -197,7 +199,7 @@ fn build_keys() map[string]Kind {
 	mut res := map[string]Kind{}
 	for t in int(Kind.keyword_beg) + 1 .. int(Kind.keyword_end) {
 		key := token.token_str[t]
-		res[key] = Kind(t)
+		res[key] = unsafe { Kind(t) }
 	}
 	return res
 }
@@ -269,7 +271,8 @@ fn build_token_str() []string {
 	s[Kind.nl] = 'NLL'
 	s[Kind.dollar] = '$'
 	s[Kind.at] = '@'
-	s[Kind.str_dollar] = '$2'
+	s[Kind.str_dollar] = 'string interpolation1'
+	s[Kind.str_lcbr] = 'string interpolation2'
 	s[Kind.key_assert] = 'assert'
 	s[Kind.key_struct] = 'struct'
 	s[Kind.key_if] = 'if'
@@ -318,6 +321,7 @@ fn build_token_str() []string {
 	s[Kind.key_nil] = 'nil'
 	s[Kind.key_offsetof] = '__offsetof'
 	s[Kind.key_is] = 'is'
+	s[Kind.key_spawn] = 'spawn'
 	// The following kinds are not for tokens returned by the V scanner.
 	// They are used just for organisation/ease of checking:
 	s[Kind.keyword_beg] = 'keyword_beg'
@@ -326,7 +330,7 @@ fn build_token_str() []string {
 	$if debug_build_token_str ? {
 		for k, v in s {
 			if v == '' {
-				eprintln('>>> ${@MOD}.${@METHOD} missing k: $k | .${kind_to_string(Kind(k))}')
+				eprintln('>>> ${@MOD}.${@METHOD} missing k: $k | .${kind_to_string(unsafe { Kind(k) })}')
 			}
 		}
 	}
@@ -539,6 +543,7 @@ pub fn kind_to_string(k Kind) string {
 		.dollar { 'dollar' }
 		.at { 'at' }
 		.str_dollar { 'str_dollar' }
+		.str_lcbr { 'str_lcbr' }
 		.left_shift { 'left_shift' }
 		.right_shift { 'right_shift' }
 		.unsigned_right_shift { 'unsigned_right_shift' }
@@ -622,13 +627,14 @@ pub fn kind_to_string(k Kind) string {
 		.key_static { 'key_static' }
 		.key_volatile { 'key_volatile' }
 		.key_unsafe { 'key_unsafe' }
+		.key_spawn { 'key_spawn' }
 		.keyword_end { 'keyword_end' }
 		._end_ { '_end_' }
 		.key_nil { 'key_nil' }
 	}
 }
 
-pub fn kind_from_string(s string) ?Kind {
+pub fn kind_from_string(s string) !Kind {
 	return match s {
 		'unknown' { .unknown }
 		'eof' { .eof }
@@ -660,6 +666,7 @@ pub fn kind_from_string(s string) ?Kind {
 		'dollar' { .dollar }
 		'at' { .at }
 		'str_dollar' { .str_dollar }
+		'str_lcbr' { .str_lcbr }
 		'left_shift' { .left_shift }
 		'right_shift' { .right_shift }
 		'unsigned_right_shift' { .unsigned_right_shift }
@@ -743,6 +750,7 @@ pub fn kind_from_string(s string) ?Kind {
 		'key_static' { .key_static }
 		'key_volatile' { .key_volatile }
 		'key_unsafe' { .key_unsafe }
+		'key_spawn' { .key_spawn }
 		'keyword_end' { .keyword_end }
 		'_end_' { ._end_ }
 		else { error('unknown') }

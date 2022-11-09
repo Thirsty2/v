@@ -106,6 +106,7 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 	is_html := method_name == 'html'
 	// $env('ENV_VAR_NAME')
 	p.check(.lpar)
+	arg_pos := p.tok.pos()
 	if method_name in ['env', 'pkgconfig', 'compile_error', 'compile_warn'] {
 		s := p.tok.lit
 		p.check(.string)
@@ -128,7 +129,7 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 	mut embed_compression_type := 'none'
 	if is_embed_file {
 		if p.tok.kind == .comma {
-			p.check(.comma)
+			p.next()
 			p.check(.dot)
 			embed_compression_type = p.check_name()
 		}
@@ -213,9 +214,9 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 				}
 			}
 			if is_html {
-				p.error('vweb HTML template "$path" not found')
+				p.error_with_pos('vweb HTML template "$tmpl_path" not found', arg_pos)
 			} else {
-				p.error('template file "$path" not found')
+				p.error_with_pos('template file "$tmpl_path" not found', arg_pos)
 			}
 			return err_node
 		}
@@ -329,12 +330,13 @@ fn (mut p Parser) at() ast.AtExpr {
 		'@VROOT' { token.AtKind.vroot_path } // deprecated, use @VEXEROOT or @VMODROOT
 		else { token.AtKind.unknown }
 	}
-	p.next()
-	return ast.AtExpr{
+	expr := ast.AtExpr{
 		name: name
 		pos: p.tok.pos()
 		kind: kind
 	}
+	p.next()
+	return expr
 }
 
 fn (mut p Parser) comptime_selector(left ast.Expr) ast.Expr {
@@ -349,7 +351,7 @@ fn (mut p Parser) comptime_selector(left ast.Expr) ast.Expr {
 		args := p.call_args()
 		p.check(.rpar)
 		if p.tok.kind == .key_orelse {
-			p.check(.key_orelse)
+			p.next()
 			p.check(.lcbr)
 		}
 		return ast.ComptimeCall{
@@ -364,7 +366,7 @@ fn (mut p Parser) comptime_selector(left ast.Expr) ast.Expr {
 	}
 	mut has_parens := false
 	if p.tok.kind == .lpar {
-		p.check(.lpar)
+		p.next()
 		has_parens = true
 	} else {
 		p.warn_with_pos('use brackets instead e.g. `s.$(field.name)` - run vfmt', p.tok.pos())

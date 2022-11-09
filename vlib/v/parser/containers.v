@@ -80,7 +80,12 @@ fn (mut p Parser) array_init() ast.ArrayInit {
 					pos := p.tok.pos()
 					n := p.check_name()
 					if n != 'init' {
-						p.error_with_pos('expected `init:`, not `$n`', pos)
+						if is_fixed {
+							p.error_with_pos('`len` and `cap` are invalid attributes for fixed array dimension',
+								pos)
+						} else {
+							p.error_with_pos('expected `init:`, not `$n`', pos)
+						}
 						return ast.ArrayInit{}
 					}
 					p.check(.colon)
@@ -192,14 +197,24 @@ fn (mut p Parser) array_init() ast.ArrayInit {
 
 // parse tokens between braces
 fn (mut p Parser) map_init() ast.MapInit {
+	old_inside_map_init := p.inside_map_init
+	p.inside_map_init = true
+	defer {
+		p.inside_map_init = old_inside_map_init
+	}
 	first_pos := p.prev_tok.pos()
 	mut keys := []ast.Expr{}
 	mut vals := []ast.Expr{}
 	mut comments := [][]ast.Comment{}
 	pre_cmnts := p.eat_comments()
 	for p.tok.kind !in [.rcbr, .eof] {
-		key := p.expr(0)
-		keys << key
+		if p.tok.kind == .name && p.tok.lit in ['r', 'c', 'js'] {
+			key := p.string_expr()
+			keys << key
+		} else {
+			key := p.expr(0)
+			keys << key
+		}
 		p.check(.colon)
 		val := p.expr(0)
 		vals << val

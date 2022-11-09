@@ -143,19 +143,19 @@ const (
 
 fn main() {
 	mut context := Context{}
-	context.parse_options()?
+	context.parse_options()!
 	context.run()
 	context.show_diff_summary()
 }
 
-fn (mut context Context) parse_options() ? {
+fn (mut context Context) parse_options() ! {
 	mut fp := flag.new_flag_parser(os.args)
 	fp.application(os.file_name(os.executable()))
 	fp.version('0.0.1')
 	fp.description('Repeat command(s) and collect statistics. Note: you have to quote each command, if it contains spaces.')
 	fp.arguments_description('CMD1 CMD2 ...')
 	fp.skip_executable()
-	fp.limit_free_args_to_at_least(1)?
+	fp.limit_free_args_to_at_least(1)!
 	context.count = fp.int('count', `c`, 10, 'Repetition count.')
 	context.series = fp.int('series', `s`, 2, 'Series count. `-s 2 -c 4 a b` => aaaabbbbaaaabbbb, while `-s 3 -c 2 a b` => aabbaabbaabb.')
 	context.warmup = fp.int('warmup', `w`, 2, 'Warmup runs. These are done *only at the start*, and are ignored.')
@@ -165,8 +165,8 @@ fn (mut context Context) parse_options() ? {
 	context.verbose = fp.bool('verbose', `v`, false, 'Be more verbose.')
 	context.fail_on_maxtime = fp.int('max_time', `m`, max_time, 'Fail with exit code 2, when first cmd takes above M milliseconds (regression).')
 	context.fail_on_regress_percent = fp.int('fail_percent', `f`, max_fail_percent, 'Fail with exit code 3, when first cmd is X% slower than the rest (regression).')
-	context.cmd_template = fp.string('template', `t`, '{T}', 'Command template. {T} will be substituted with the current command.')
-	cmd_params := fp.string_multi('parameter', `p`, 'A parameter substitution list. `{p}=val1,val2,val2` means that {p} in the template, will be substituted with each of val1, val2, val3.')
+	context.cmd_template = fp.string('template', `t`, r'{T}', r'Command template. {T} will be substituted with the current command.')
+	cmd_params := fp.string_multi('parameter', `p`, r'A parameter substitution list. `{p}=val1,val2,val2` means that {p} in the template, will be substituted with each of val1, val2, val3.')
 	context.nmins = fp.int('nmins', `i`, 0, 'Ignore the BOTTOM X results (minimum execution time). Makes the results more robust to performance flukes.')
 	context.nmaxs = fp.int('nmaxs', `a`, 1, 'Ignore the TOP X results (maximum execution time). Makes the results more robust to performance flukes.')
 	for p in cmd_params {
@@ -212,7 +212,7 @@ fn (mut context Context) clear_line() {
 fn (mut context Context) expand_all_commands(commands []string) []string {
 	mut all_commands := []string{}
 	for cmd in commands {
-		maincmd := context.cmd_template.replace('{T}', cmd)
+		maincmd := context.cmd_template.replace(r'{T}', cmd)
 		mut substituted_commands := []string{}
 		substituted_commands << maincmd
 		for paramk, paramlist in context.cmd_params {

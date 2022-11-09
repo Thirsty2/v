@@ -137,26 +137,41 @@ fn stringify_fn_after_name(node &FnDecl, mut f strings.Builder, t &Table, cur_mo
 			f.write_string(arg.typ.share().str() + ' ')
 		}
 		f.write_string(arg.name)
-		mut s := t.type_to_str(arg.typ.clear_flag(.shared_f))
-		if arg.is_mut {
-			arg_sym := t.sym(arg.typ)
-			if s.starts_with('&') && ((!arg_sym.is_number() && arg_sym.kind != .bool)
-				|| node.language != .v) {
-				s = s[1..]
+		arg_sym := t.sym(arg.typ)
+		if arg_sym.kind == .struct_ && (arg_sym.info as Struct).is_anon {
+			f.write_string(' struct {')
+			struct_ := arg_sym.info as Struct
+			for field in struct_.fields {
+				f.write_string(' $field.name ${t.type_to_str(field.typ)}')
+				if field.has_default_expr {
+					f.write_string(' = $field.default_expr')
+				}
 			}
-		}
-		s = util.no_cur_mod(s, cur_mod)
-		for mod, alias in m2a {
-			s = s.replace(mod, alias)
-		}
-		if should_add_type {
-			if !is_type_only {
+			if struct_.fields.len > 0 {
 				f.write_string(' ')
 			}
-			if node.is_variadic && is_last_arg {
-				f.write_string('...')
+			f.write_string('}')
+		} else {
+			mut s := t.type_to_str(arg.typ.clear_flag(.shared_f))
+			if arg.is_mut {
+				if s.starts_with('&') && ((!arg_sym.is_number() && arg_sym.kind != .bool)
+					|| node.language != .v) {
+					s = s[1..]
+				}
 			}
-			f.write_string(s)
+			s = util.no_cur_mod(s, cur_mod)
+			for mod, alias in m2a {
+				s = s.replace(mod, alias)
+			}
+			if should_add_type {
+				if !is_type_only {
+					f.write_string(' ')
+				}
+				if node.is_variadic && is_last_arg {
+					f.write_string('...')
+				}
+				f.write_string(s)
+			}
 		}
 		if !is_last_arg {
 			f.write_string(', ')
@@ -215,7 +230,7 @@ pub fn (lit &StringInterLiteral) get_fspec_braces(i int) (string, bool) {
 	needs_fspec := lit.need_fmts[i] || lit.pluss[i]
 		|| (lit.fills[i] && lit.fwidths[i] >= 0) || lit.fwidths[i] != 0
 		|| lit.precisions[i] != 987698
-	mut needs_braces := needs_fspec
+	mut needs_braces := !lit.has_dollar[i] || needs_fspec
 	sx := lit.exprs[i].str()
 	if sx.contains(r'"') || sx.contains(r"'") {
 		needs_braces = true
@@ -465,7 +480,9 @@ pub fn (x Expr) str() string {
 				if i >= x.exprs.len {
 					break
 				}
-				res.write_string('$')
+				if x.has_dollar[i] {
+					res.write_string('$')
+				}
 				fspec_str, needs_braces := x.get_fspec_braces(i)
 				if needs_braces {
 					res.write_string('{')

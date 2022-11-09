@@ -16,7 +16,7 @@ import hash.fnv1a
 
 [minify]
 pub struct Parser {
-	pref &pref.Preferences
+	pref &pref.Preferences = unsafe { nil }
 mut:
 	file_base         string       // "hello.v"
 	file_name         string       // "/home/user/hello.v"
@@ -28,7 +28,7 @@ mut:
 	tok                       token.Token
 	prev_tok                  token.Token
 	peek_tok                  token.Token
-	table                     &ast.Table
+	table                     &ast.Table = unsafe { nil }
 	language                  ast.Language
 	fn_language               ast.Language // .c for `fn C.abcd()` declarations
 	expr_level                int  // prevent too deep recursions for pathological programs
@@ -59,6 +59,7 @@ mut:
 	inside_generic_params     bool // indicates if parsing between `<` and `>` of a method/function
 	inside_receiver_param     bool // indicates if parsing the receiver parameter inside the first `(` and `)` of a method
 	inside_struct_field_decl  bool
+	inside_map_init           bool
 	or_is_handled             bool       // ignore `or` in this expression
 	builtin_mod               bool       // are we in the `builtin` module?
 	mod                       string     // current module name
@@ -68,7 +69,7 @@ mut:
 	is_translated             bool       // `[translated] module abc` - mark a file as translated, to relax some compiler checks for translated code.
 	attrs                     []ast.Attr // attributes before next decl stmt
 	expr_mod                  string     // for constructing full type names in parse_type()
-	scope                     &ast.Scope
+	scope                     &ast.Scope = unsafe { nil }
 	imports                   map[string]string // alias => mod_name
 	ast_imports               []ast.Import      // mod_names
 	used_imports              []string // alias
@@ -92,7 +93,7 @@ mut:
 	script_mode               bool
 	script_mode_start_token   token.Token
 pub mut:
-	scanner    &scanner.Scanner
+	scanner    &scanner.Scanner = unsafe { nil }
 	errors     []errors.Error
 	warnings   []errors.Warning
 	notices    []errors.Notice
@@ -371,10 +372,10 @@ mut:
 	mu               &sync.Mutex
 	mu2              &sync.Mutex
 	paths            []string
-	table            &ast.Table
+	table            &ast.Table = unsafe { nil }
 	parsed_ast_files []&ast.File
-	pref             &pref.Preferences
-	global_scope     &ast.Scope
+	pref             &pref.Preferences = unsafe { nil }
+	global_scope     &ast.Scope = unsafe { nil }
 }
 
 fn (mut q Queue) run() {
@@ -470,6 +471,9 @@ fn (p &Parser) peek_token_after_var_list() token.Token {
 	mut n := 0
 	mut tok := p.tok
 	for {
+		if tok.kind == .eof {
+			break
+		}
 		if tok.kind == .key_mut {
 			n += 2
 		} else {
@@ -494,6 +498,9 @@ fn (p &Parser) is_fn_type_decl() bool {
 	cur_ln := p.tok.line_nr
 	for {
 		tok = p.scanner.peek_token(n)
+		if tok.kind == .eof {
+			break
+		}
 		if tok.kind in [.lpar, .rpar] {
 			n++
 			prev_tok = tok
@@ -995,7 +1002,7 @@ pub fn (mut p Parser) stmt(is_top_level bool) ast.Stmt {
 				}
 				.name {
 					mut pos := p.tok.pos()
-					expr := p.comptime_call()
+					expr := p.expr(0)
 					pos.update_last_line(p.prev_tok.line_nr)
 					return ast.ExprStmt{
 						expr: expr
@@ -1044,7 +1051,7 @@ pub fn (mut p Parser) stmt(is_top_level bool) ast.Stmt {
 				}
 			}
 		}
-		.key_go {
+		.key_go, .key_spawn {
 			go_expr := p.go_expr()
 			return ast.ExprStmt{
 				expr: go_expr
@@ -1916,7 +1923,7 @@ pub fn (mut p Parser) error_with_pos(s string, pos token.Pos) ast.NodeError {
 
 		// To avoid getting stuck after an error, the parser
 		// will proceed to the next token.
-		if p.pref.check_only {
+		if p.pref.check_only || p.pref.only_check_syntax {
 			p.next()
 		}
 	}
@@ -2667,11 +2674,14 @@ fn (mut p Parser) index_expr(left ast.Expr, is_gated bool) ast.IndexExpr {
 					is_gated: is_gated
 				}
 			}
-			// `a[start..end] ?`
-			if p.tok.kind == .question {
+			// `a[start..end]!`
+			if p.tok.kind == .not {
 				or_pos_high = p.tok.pos()
-				or_kind_high = .propagate_option
+				or_kind_high = .propagate_result
 				p.next()
+			} else if p.tok.kind == .question {
+				p.error_with_pos('`?` for propagating errors from index expressions is no longer supported, use `!` instead of `?`',
+					p.tok.pos())
 			}
 		}
 
@@ -2733,11 +2743,14 @@ fn (mut p Parser) index_expr(left ast.Expr, is_gated bool) ast.IndexExpr {
 					is_gated: is_gated
 				}
 			}
-			// `a[start..end] ?`
-			if p.tok.kind == .question {
+			// `a[start..end]!`
+			if p.tok.kind == .not {
 				or_pos_low = p.tok.pos()
-				or_kind_low = .propagate_option
+				or_kind_low = .propagate_result
 				p.next()
+			} else if p.tok.kind == .question {
+				p.error_with_pos('`?` for propagating errors from index expressions is no longer supported, use `!` instead of `?`',
+					p.tok.pos())
 			}
 		}
 
@@ -2782,11 +2795,14 @@ fn (mut p Parser) index_expr(left ast.Expr, is_gated bool) ast.IndexExpr {
 				is_gated: is_gated
 			}
 		}
-		// `a[i] ?`
-		if p.tok.kind == .question {
+		// `a[i]!`
+		if p.tok.kind == .not {
 			or_pos = p.tok.pos()
-			or_kind = .propagate_option
+			or_kind = .propagate_result
 			p.next()
+		} else if p.tok.kind == .question {
+			p.error_with_pos('`?` for propagating errors from index expressions is no longer supported, use `!` instead of `?`',
+				p.tok.pos())
 		}
 	}
 	return ast.IndexExpr{
@@ -3040,7 +3056,7 @@ fn (mut p Parser) string_expr() ast.Expr {
 	val := p.tok.lit
 	mut pos := p.tok.pos()
 	pos.last_line = pos.line_nr + val.count('\n')
-	if p.peek_tok.kind != .str_dollar {
+	if p.peek_tok.kind != .str_dollar && p.peek_tok.kind != .str_lcbr {
 		p.next()
 		p.filter_string_vet_errors(pos)
 		node = ast.StringLiteral{
@@ -3060,14 +3076,16 @@ fn (mut p Parser) string_expr() ast.Expr {
 	mut fills := []bool{}
 	mut fmts := []u8{}
 	mut fposs := []token.Pos{}
+	mut has_dollar := []bool{}
 	// Handle $ interpolation
 	p.inside_str_interp = true
 	for p.tok.kind == .string {
 		vals << p.tok.lit
 		p.next()
-		if p.tok.kind != .str_dollar {
+		if p.tok.kind != .str_dollar && p.tok.kind != .str_lcbr {
 			break
 		}
+		has_dollar_ := p.tok.kind == .str_dollar
 		p.next()
 		exprs << p.expr(0)
 		mut has_fmt := false
@@ -3120,6 +3138,7 @@ fn (mut p Parser) string_expr() ast.Expr {
 		fmts << fmt
 		fills << fill
 		fposs << p.prev_tok.pos()
+		has_dollar << has_dollar_
 	}
 	pos = pos.extend(p.prev_tok.pos())
 	p.filter_string_vet_errors(pos)
@@ -3134,6 +3153,7 @@ fn (mut p Parser) string_expr() ast.Expr {
 		fmts: fmts
 		fmt_poss: fposs
 		pos: pos
+		has_dollar: has_dollar
 	}
 	// need_fmts: prelimery - until checker finds out if really needed
 	p.inside_str_interp = false
@@ -3649,8 +3669,14 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 		return ast.EnumDecl{}
 	}
 	name := p.prepend_mod(enum_name)
+	mut enum_type := ast.int_type
+	if p.tok.kind == .key_as {
+		p.next()
+		enum_type = p.parse_type()
+	}
 	p.check(.lcbr)
 	enum_decl_comments := p.eat_comments()
+	senum_type := p.table.get_type_name(enum_type)
 	mut vals := []string{}
 	// mut default_exprs := []ast.Expr{}
 	mut fields := []ast.EnumField{}
@@ -3682,8 +3708,8 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 	is_flag := p.attrs.contains('flag')
 	is_multi_allowed := p.attrs.contains('_allow_multiple_values')
 	if is_flag {
-		if fields.len > 32 {
-			p.error('when an enum is used as bit field, it must have a max of 32 fields')
+		if fields.len > 64 {
+			p.error('when an enum is used as bit field, it must have a max of 64 fields')
 			return ast.EnumDecl{}
 		}
 		for f in fields {
@@ -3696,12 +3722,12 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 		pubfn := if p.mod == 'main' { 'fn' } else { 'pub fn' }
 		p.codegen('
 //
-[inline] $pubfn (    e &$enum_name) is_empty() bool           { return  int(*e) == 0 }
-[inline] $pubfn (    e &$enum_name) has(flag $enum_name) bool { return  (int(*e) &  (int(flag))) != 0 }
-[inline] $pubfn (    e &$enum_name) all(flag $enum_name) bool { return  (int(*e) &  (int(flag))) == int(flag) }
-[inline] $pubfn (mut e  $enum_name) set(flag $enum_name)      { unsafe{ *e = ${enum_name}(int(*e) |  (int(flag))) } }
-[inline] $pubfn (mut e  $enum_name) clear(flag $enum_name)    { unsafe{ *e = ${enum_name}(int(*e) & ~(int(flag))) } }
-[inline] $pubfn (mut e  $enum_name) toggle(flag $enum_name)   { unsafe{ *e = ${enum_name}(int(*e) ^  (int(flag))) } }
+[inline] $pubfn (    e &$enum_name) is_empty() bool           { return  ${senum_type}(*e) == 0 }
+[inline] $pubfn (    e &$enum_name) has(flag $enum_name) bool { return  (${senum_type}(*e) &  (${senum_type}(flag))) != 0 }
+[inline] $pubfn (    e &$enum_name) all(flag $enum_name) bool { return  (${senum_type}(*e) &  (${senum_type}(flag))) == ${senum_type}(flag) }
+[inline] $pubfn (mut e  $enum_name) set(flag $enum_name)      { unsafe{ *e = ${enum_name}(${senum_type}(*e) |  (${senum_type}(flag))) } }
+[inline] $pubfn (mut e  $enum_name) clear(flag $enum_name)    { unsafe{ *e = ${enum_name}(${senum_type}(*e) & ~(${senum_type}(flag))) } }
+[inline] $pubfn (mut e  $enum_name) toggle(flag $enum_name)   { unsafe{ *e = ${enum_name}(${senum_type}(*e) ^  (${senum_type}(flag))) } }
 //
 ')
 	}
@@ -3725,6 +3751,7 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 
 	enum_decl := ast.EnumDecl{
 		name: name
+		typ: enum_type
 		is_pub: is_pub
 		is_flag: is_flag
 		is_multi_allowed: is_multi_allowed
