@@ -46,8 +46,7 @@ pub enum Kind {
 	hash // #
 	dollar // $
 	at // @
-	str_dollar // ${} or $, old interpolation
-	str_lcbr // {interpolation
+	str_dollar
 	left_shift // <<
 	right_shift // >>
 	unsigned_right_shift // >>>
@@ -271,8 +270,7 @@ fn build_token_str() []string {
 	s[Kind.nl] = 'NLL'
 	s[Kind.dollar] = '$'
 	s[Kind.at] = '@'
-	s[Kind.str_dollar] = 'string interpolation1'
-	s[Kind.str_lcbr] = 'string interpolation2'
+	s[Kind.str_dollar] = '$2'
 	s[Kind.key_assert] = 'assert'
 	s[Kind.key_struct] = 'struct'
 	s[Kind.key_if] = 'if'
@@ -330,7 +328,7 @@ fn build_token_str() []string {
 	$if debug_build_token_str ? {
 		for k, v in s {
 			if v == '' {
-				eprintln('>>> ${@MOD}.${@METHOD} missing k: $k | .${kind_to_string(unsafe { Kind(k) })}')
+				eprintln('>>> ${@MOD}.${@METHOD} missing k: ${k} | .${kind_to_string(unsafe { Kind(k) })}')
 			}
 		}
 	}
@@ -369,14 +367,14 @@ pub fn (t Token) str() string {
 		eprintln('missing token kind string')
 	} else if !s[0].is_letter() {
 		// punctuation, operators
-		return 'token `$s`'
+		return 'token `${s}`'
 	}
 	if is_key(t.lit) {
 		s = 'keyword'
 	}
 	if t.lit != '' {
 		// string contents etc
-		s += ' `$t.lit`'
+		s += ' `${t.lit}`'
 	}
 	return s
 }
@@ -384,7 +382,7 @@ pub fn (t Token) str() string {
 pub fn (t Token) debug() string {
 	ks := kind_to_string(t.kind)
 	s := if t.lit == '' { t.kind.str() } else { t.lit }
-	return 'tok: .${ks:-12} | lit: `$s`'
+	return 'tok: .${ks:-12} | lit: `${s}`'
 }
 
 // Representation of highest and lowest precedence
@@ -543,7 +541,6 @@ pub fn kind_to_string(k Kind) string {
 		.dollar { 'dollar' }
 		.at { 'at' }
 		.str_dollar { 'str_dollar' }
-		.str_lcbr { 'str_lcbr' }
 		.left_shift { 'left_shift' }
 		.right_shift { 'right_shift' }
 		.unsigned_right_shift { 'unsigned_right_shift' }
@@ -666,7 +663,6 @@ pub fn kind_from_string(s string) !Kind {
 		'dollar' { .dollar }
 		'at' { .at }
 		'str_dollar' { .str_dollar }
-		'str_lcbr' { .str_lcbr }
 		'left_shift' { .left_shift }
 		'right_shift' { .right_shift }
 		'unsigned_right_shift' { .unsigned_right_shift }

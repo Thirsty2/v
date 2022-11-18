@@ -36,7 +36,7 @@ pub fn default() string {
 			'/Library/Fonts/Arial.ttf']
 		for font in fonts {
 			if os.is_file(font) {
-				debug_font_println('Using font "$font"')
+				debug_font_println('Using font "${font}"')
 				return font
 			}
 		}
@@ -58,7 +58,7 @@ pub fn default() string {
 							for location in font_locations {
 								candidate_path := os.join_path(location, candidate_font)
 								if os.is_file(candidate_path) && os.is_readable(candidate_path) {
-									debug_font_println('Using font "$candidate_path"')
+									debug_font_println('Using font "${candidate_path}"')
 									return candidate_path
 								}
 							}
@@ -68,12 +68,12 @@ pub fn default() string {
 			}
 		}
 	}
-	mut fm := os.execute("fc-match --format='%\{file}\n' -s")
+	mut fm := os.execute("fc-match --format='%{file}\n' -s")
 	if fm.exit_code == 0 {
 		lines := fm.output.split('\n')
 		for l in lines {
 			if !l.contains('.ttc') {
-				debug_font_println('Using font "$l"')
+				debug_font_println('Using font "${l}"')
 				return l
 			}
 		}

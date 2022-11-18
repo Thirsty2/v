@@ -14,11 +14,28 @@ $if windows {
 
 #include "sqlite3.h"
 
+// https://www.sqlite.org/rescode.html
 pub const (
-	sqlite_ok    = 0
-	sqlite_error = 1
-	sqlite_row   = 100
-	sqlite_done  = 101
+	sqlite_ok                 = 0
+	sqlite_error              = 1
+	sqlite_row                = 100
+	sqlite_done               = 101
+	sqlite_cantopen           = 14
+	sqlite_ioerr_read         = 266
+	sqlite_ioerr_short_read   = 522
+	sqlite_ioerr_write        = 778
+	sqlite_ioerr_fsync        = 1034
+	sqlite_ioerr_fstat        = 1802
+	sqlite_ioerr_delete       = 2570
+
+	sqlite_open_main_db       = 0x00000100
+	sqlite_open_temp_db       = 0x00000200
+	sqlite_open_transient_db  = 0x00000400
+	sqlite_open_main_journal  = 0x00000800
+	sqlite_open_temp_journal  = 0x00001000
+	sqlite_open_subjournal    = 0x00002000
+	sqlite_open_super_journal = 0x00004000
+	sqlite_open_wal           = 0x00080000
 )
 
 pub enum SyncMode {
@@ -105,6 +122,8 @@ fn C.sqlite3_errmsg(&C.sqlite3) &char
 
 fn C.sqlite3_free(voidptr)
 
+fn C.sqlite3_changes(&C.sqlite3) int
+
 // connect Opens the connection with a database.
 pub fn connect(path string) !DB {
 	db := &C.sqlite3(0)
@@ -149,10 +168,15 @@ fn get_int_from_stmt(stmt &C.sqlite3_stmt) int {
 	return res
 }
 
-// Returns last insert rowid
+// last_insert_rowid returns last inserted rowid
 // https://www.sqlite.org/c3ref/last_insert_rowid.html
 pub fn (db &DB) last_insert_rowid() i64 {
 	return C.sqlite3_last_insert_rowid(db.conn)
+}
+
+// get_affected_rows_count returns `sqlite changes()` meaning amount of rows affected by most recent sql query
+pub fn (db &DB) get_affected_rows_count() int {
+	return C.sqlite3_changes(db.conn)
 }
 
 // Returns a single cell with value int.
@@ -240,7 +264,7 @@ pub fn (db &DB) exec_one(query string) !Row {
 [manualfree]
 pub fn (db &DB) error_message(code int, query string) IError {
 	errmsg := unsafe { cstring_to_vstring(&char(C.sqlite3_errmsg(db.conn))) }
-	msg := '$errmsg ($code) ($query)'
+	msg := '${errmsg} (${code}) (${query})'
 	unsafe { errmsg.free() }
 	return SQLError{
 		msg: msg
@@ -269,7 +293,7 @@ pub fn (db &DB) exec_param(query string, param string) []Row {
 // Creates table named 'table_name', with columns generated from 'columns' array.
 // Default columns type will be TEXT.
 pub fn (db &DB) create_table(table_name string, columns []string) {
-	db.exec('create table if not exists $table_name (' + columns.join(',\n') + ')')
+	db.exec('create table if not exists ${table_name} (' + columns.join(',\n') + ')')
 }
 
 // Set a busy timeout in milliseconds.
