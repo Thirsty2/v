@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module builder
@@ -120,6 +120,7 @@ mut:
 	source_args  []string // for `x.tmp.c`
 	post_args    []string // options that should go after .o_args
 	linker_flags []string // `-lm`
+	ldflags      []string // `-labcd' from `v -ldflags "-labcd"`
 }
 
 fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
@@ -129,6 +130,7 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	mut optimization_options := ['-O2']
 	// arguments for the C compiler
 	ccoptions.args = [v.pref.cflags]
+	ccoptions.ldflags = [v.pref.ldflags]
 	if !v.pref.no_std {
 		if v.pref.os == .linux {
 			ccoptions.args << '-std=gnu99 -D_DEFAULT_SOURCE'
@@ -185,7 +187,7 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	ccoptions.guessed_compiler = v.pref.ccompiler
 	if ccoptions.guessed_compiler == 'cc' && v.pref.is_prod {
 		// deliberately guessing only for -prod builds for performance reasons
-		ccversion := os.execute('${os.quoted_path('cc')} --version')
+		ccversion := os.execute('cc --version')
 		if ccversion.exit_code == 0 {
 			if ccversion.output.contains('This is free software;')
 				&& ccversion.output.contains('Free Software Foundation, Inc.') {
@@ -196,12 +198,14 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 			}
 		}
 	}
-	//
-	ccoptions.is_cc_tcc = ccompiler.contains('tcc') || ccoptions.guessed_compiler == 'tcc'
-	ccoptions.is_cc_gcc = ccompiler.contains('gcc') || ccoptions.guessed_compiler == 'gcc'
-	ccoptions.is_cc_icc = ccompiler.contains('icc') || ccoptions.guessed_compiler == 'icc'
-	ccoptions.is_cc_msvc = ccompiler.contains('msvc') || ccoptions.guessed_compiler == 'msvc'
-	ccoptions.is_cc_clang = ccompiler.contains('clang') || ccoptions.guessed_compiler == 'clang'
+	ccompiler_file_name := os.file_name(ccompiler)
+	ccoptions.is_cc_tcc = ccompiler_file_name.contains('tcc') || ccoptions.guessed_compiler == 'tcc'
+	ccoptions.is_cc_gcc = ccompiler_file_name.contains('gcc') || ccoptions.guessed_compiler == 'gcc'
+	ccoptions.is_cc_icc = ccompiler_file_name.contains('icc') || ccoptions.guessed_compiler == 'icc'
+	ccoptions.is_cc_msvc = ccompiler_file_name.contains('msvc')
+		|| ccoptions.guessed_compiler == 'msvc'
+	ccoptions.is_cc_clang = ccompiler_file_name.contains('clang')
+		|| ccoptions.guessed_compiler == 'clang'
 	// For C++ we must be very tolerant
 	if ccoptions.guessed_compiler.contains('++') {
 		ccoptions.args << '-fpermissive'
@@ -412,7 +416,9 @@ fn (v &Builder) all_args(ccoptions CcompilerOptions) []string {
 		// normally msvc should use /volatile:iso
 		// but it could have an impact on vinix if it is created with msvc.
 		if !ccoptions.is_cc_msvc {
-			all << '-Wl,-stack=16777216'
+			if v.pref.os != .wasm32_emscripten {
+				all << '-Wl,-stack=16777216'
+			}
 			if !v.pref.is_cstrict {
 				all << '-Werror=implicit-function-declaration'
 			}
@@ -426,6 +432,7 @@ fn (v &Builder) all_args(ccoptions CcompilerOptions) []string {
 	if v.pref.build_mode != .build_module {
 		all << ccoptions.linker_flags
 		all << ccoptions.env_ldflags
+		all << ccoptions.ldflags
 	}
 	return all
 }
@@ -438,6 +445,7 @@ fn (v &Builder) thirdparty_object_args(ccoptions CcompilerOptions, middle []stri
 	// NOTE do not append linker flags in .o build process,
 	// compilers are inconsistent about how they handle:
 	// all << ccoptions.env_ldflags
+	// all << ccoptions.ldflags
 	return all
 }
 
@@ -569,14 +577,14 @@ pub fn (mut v Builder) cc() {
 		all_args := v.all_args(v.ccoptions)
 		v.dump_c_options(all_args)
 		str_args := all_args.join(' ')
-		mut cmd := '${os.quoted_path(ccompiler)} ${str_args}'
+		mut cmd := '${v.quote_compiler_name(ccompiler)} ${str_args}'
 		mut response_file := ''
 		mut response_file_content := str_args
 		if !v.pref.no_rsp {
 			response_file = '${v.out_name_c}.rsp'
 			response_file_content = str_args.replace('\\', '\\\\')
 			rspexpr := '@${response_file}'
-			cmd = '${os.quoted_path(ccompiler)} ${os.quoted_path(rspexpr)}'
+			cmd = '${v.quote_compiler_name(ccompiler)} ${os.quoted_path(rspexpr)}'
 			os.write_file(response_file, response_file_content) or {
 				verror('Unable to write to C response file "${response_file}"')
 			}
@@ -735,7 +743,7 @@ fn (mut b Builder) cc_linux_cross() {
 		cc_name = 'clang.exe'
 		out_name = out_name.trim_string_right('.exe')
 	}
-	cc_cmd := '${os.quoted_path(cc_name)} ' + cc_args.join(' ')
+	cc_cmd := '${b.quote_compiler_name(cc_name)} ' + cc_args.join(' ')
 	if b.pref.show_cc {
 		println(cc_cmd)
 	}
@@ -757,7 +765,7 @@ fn (mut b Builder) cc_linux_cross() {
 	$if windows {
 		ldlld = 'ld.lld.exe'
 	}
-	linker_cmd := '${os.quoted_path(ldlld)} ' + linker_args.join(' ')
+	linker_cmd := '${b.quote_compiler_name(ldlld)} ' + linker_args.join(' ')
 	// s = s.replace('SYSROOT', sysroot) // TODO $ inter bug
 	// s = s.replace('-o hi', '-o ' + c.pref.out_name)
 	if b.pref.show_cc {
@@ -774,6 +782,13 @@ fn (mut b Builder) cc_linux_cross() {
 
 fn (mut c Builder) cc_windows_cross() {
 	println('Cross compiling for Windows...')
+	cross_compiler_name := c.pref.vcross_compiler_name()
+	cross_compiler_name_path := os.find_abs_path_of_executable(cross_compiler_name) or {
+		eprintln('Could not find `${cross_compiler_name}` in your PATH.')
+		eprintln('See https://github.com/vlang/v/blob/master/doc/docs.md#cross-compilation for instructions on how to fix that.')
+		exit(1)
+	}
+	//
 	c.setup_ccompiler_options(c.pref.ccompiler)
 	c.build_thirdparty_obj_files()
 	c.setup_output_name()
@@ -839,18 +854,21 @@ fn (mut c Builder) cc_windows_cross() {
 	obj_name = obj_name.replace('.o.o', '.o')
 	include := '-I $winroot/include '
 	*/
-	if os.user_os() !in ['macos', 'linux'] {
+	if os.user_os() !in ['macos', 'linux', 'termux'] {
 		println(os.user_os())
 		panic('your platform is not supported yet')
 	}
+	//
 	mut all_args := []string{}
 	all_args << optimization_options
 	all_args << debug_options
 	all_args << '-std=gnu11'
+	//
 	all_args << args
 	all_args << '-municode'
+	all_args << '${c.pref.ldflags}'
 	c.dump_c_options(all_args)
-	mut cmd := c.pref.vcross_compiler_name() + ' ' + all_args.join(' ')
+	mut cmd := cross_compiler_name_path + ' ' + all_args.join(' ')
 	// cmd := 'clang -o $obj_name -w $include -m32 -c -target x86_64-win32 ${pref.default_module_path}/$c.out_name_c'
 	if c.pref.is_verbose || c.pref.show_cc {
 		println(cmd)
@@ -930,8 +948,7 @@ fn (mut v Builder) build_thirdparty_obj_file(mod string, path string, moduleflag
 	all_options << '-o ${os.quoted_path(opath)}'
 	all_options << '-c ${os.quoted_path(cfile)}'
 	cc_options := v.thirdparty_object_args(v.ccoptions, all_options).join(' ')
-
-	cmd := '${os.quoted_path(v.pref.ccompiler)} ${cc_options}'
+	cmd := '${v.quote_compiler_name(v.pref.ccompiler)} ${cc_options}'
 	$if trace_thirdparty_obj_files ? {
 		println('>>> build_thirdparty_obj_files cmd: ${cmd}')
 	}
@@ -978,4 +995,18 @@ fn error_context_lines(text string, keyword string, before int, after int) []str
 	idx_s := if eline_idx - before >= 0 { eline_idx - before } else { 0 }
 	idx_e := if idx_s + after < lines.len { idx_s + after } else { lines.len }
 	return lines[idx_s..idx_e]
+}
+
+pub fn (mut v Builder) quote_compiler_name(name string) string {
+	$if windows {
+		// some compiler frontends on windows, like emcc, are a .bat file on windows.
+		// Quoting the .bat file name here leads to problems with them, when they internally call python scripts for some reason.
+		// Just emcc without quotes here does work, but:
+		// |"emcc" -v| produces: python.exe: can't open file 'D:\programs\v\emcc.py': [Errno 2] No such file or directory
+		if name.contains('/') || name.contains('\\') {
+			return os.quoted_path(name)
+		}
+		return name
+	}
+	return os.quoted_path(name)
 }

@@ -13,9 +13,9 @@ mut:
 	is_assert bool
 }
 
-pub fn new_transformer(pref &pref.Preferences) &Transformer {
+pub fn new_transformer(pref_ &pref.Preferences) &Transformer {
 	return &Transformer{
-		pref: pref
+		pref: pref_
 		index: &IndexState{
 			saved_key_vals: [][]KeyVal{cap: 1000}
 			saved_disabled: []bool{cap: 1000}
@@ -23,8 +23,8 @@ pub fn new_transformer(pref &pref.Preferences) &Transformer {
 	}
 }
 
-pub fn new_transformer_with_table(table &ast.Table, pref &pref.Preferences) &Transformer {
-	mut transformer := new_transformer(pref)
+pub fn new_transformer_with_table(table &ast.Table, pref_ &pref.Preferences) &Transformer {
+	mut transformer := new_transformer(pref_)
 	transformer.table = table
 	return transformer
 }
@@ -404,8 +404,8 @@ pub fn (mut t Transformer) expr_stmt_match_expr(mut node ast.MatchExpr) ast.Expr
 
 			match cond {
 				ast.BoolLiteral {
-					if expr is ast.BoolLiteral {
-						if cond.val == (expr as ast.BoolLiteral).val {
+					if mut expr is ast.BoolLiteral {
+						if cond.val == expr.val {
 							branch.exprs = [expr]
 							node.branches = [branch]
 							terminate = true
@@ -413,8 +413,8 @@ pub fn (mut t Transformer) expr_stmt_match_expr(mut node ast.MatchExpr) ast.Expr
 					}
 				}
 				ast.IntegerLiteral {
-					if expr is ast.IntegerLiteral {
-						if cond.val.int() == (expr as ast.IntegerLiteral).val.int() {
+					if mut expr is ast.IntegerLiteral {
+						if cond.val.int() == expr.val.int() {
 							branch.exprs = [expr]
 							node.branches = [branch]
 							terminate = true
@@ -422,8 +422,8 @@ pub fn (mut t Transformer) expr_stmt_match_expr(mut node ast.MatchExpr) ast.Expr
 					}
 				}
 				ast.FloatLiteral {
-					if expr is ast.FloatLiteral {
-						if cond.val.f32() == (expr as ast.FloatLiteral).val.f32() {
+					if mut expr is ast.FloatLiteral {
+						if cond.val.f32() == expr.val.f32() {
 							branch.exprs = [expr]
 							node.branches = [branch]
 							terminate = true
@@ -431,8 +431,8 @@ pub fn (mut t Transformer) expr_stmt_match_expr(mut node ast.MatchExpr) ast.Expr
 					}
 				}
 				ast.StringLiteral {
-					if expr is ast.StringLiteral {
-						if cond.val == (expr as ast.StringLiteral).val {
+					if mut expr is ast.StringLiteral {
+						if cond.val == expr.val {
 							branch.exprs = [expr]
 							node.branches = [branch]
 							terminate = true

@@ -11,7 +11,7 @@ module arrays
 
 // min returns the minimum value in the array
 // Example: arrays.min([1,2,3,0,9]) // => 0
-pub fn min<T>(array []T) !T {
+pub fn min[T](array []T) !T {
 	if array.len == 0 {
 		return error('.min called on an empty array')
 	}
@@ -26,7 +26,7 @@ pub fn min<T>(array []T) !T {
 
 // max returns the maximum value in the array
 // Example: arrays.max([1,2,3,0,9]) // => 9
-pub fn max<T>(array []T) !T {
+pub fn max[T](array []T) !T {
 	if array.len == 0 {
 		return error('.max called on an empty array')
 	}
@@ -41,7 +41,7 @@ pub fn max<T>(array []T) !T {
 
 // idx_min returns the index of the minimum value in the array
 // Example: arrays.idx_min([1,2,3,0,9]) // => 3
-pub fn idx_min<T>(array []T) !int {
+pub fn idx_min[T](array []T) !int {
 	if array.len == 0 {
 		return error('.idx_min called on an empty array')
 	}
@@ -58,7 +58,7 @@ pub fn idx_min<T>(array []T) !int {
 
 // idx_max returns the index of the maximum value in the array
 // Example: arrays.idx_max([1,2,3,0,9]) // => 4
-pub fn idx_max<T>(array []T) !int {
+pub fn idx_max[T](array []T) !int {
 	if array.len == 0 {
 		return error('.idx_max called on an empty array')
 	}
@@ -76,7 +76,7 @@ pub fn idx_max<T>(array []T) !int {
 // merge two sorted arrays (ascending) and maintain sorted order
 // Example: arrays.merge([1,3,5,7], [2,4,6,8]) // => [1,2,3,4,5,6,7,8]
 [direct_array_access]
-pub fn merge<T>(a []T, b []T) []T {
+pub fn merge[T](a []T, b []T) []T {
 	mut m := []T{len: a.len + b.len}
 	mut ia := 0
 	mut ib := 0
@@ -114,7 +114,7 @@ pub fn merge<T>(a []T, b []T) []T {
 //
 // NOTE: An error will be generated if the type annotation is omitted.
 // Example: arrays.group<int>([1,2,3],[4,5,6]) // => [[1, 4], [2, 5], [3, 6]]
-pub fn group<T>(arrays ...[]T) [][]T {
+pub fn group[T](arrays ...[]T) [][]T {
 	mut length := if arrays.len > 0 { arrays[0].len } else { 0 }
 	// calculate length of output by finding shortest input array
 	for ndx in 1 .. arrays.len {
@@ -142,7 +142,7 @@ pub fn group<T>(arrays ...[]T) [][]T {
 
 // chunk array into a single array of arrays where each element is the next `size` elements of the original
 // Example: arrays.chunk([1, 2, 3, 4, 5, 6, 7, 8, 9], 2)) // => [[1, 2], [3, 4], [5, 6], [7, 8], [9]]
-pub fn chunk<T>(array []T, size int) [][]T {
+pub fn chunk[T](array []T, size int) [][]T {
 	// allocate chunk array
 	mut chunks := [][]T{cap: array.len / size + if array.len % size == 0 { 0 } else { 1 }}
 
@@ -177,7 +177,7 @@ pub struct WindowAttribute {
 //
 // Example: arrays.window([1, 2, 3, 4], size: 2) // => [[1, 2], [2, 3], [3, 4]]
 // Example: arrays.window([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], size: 3, step: 2) // => [[1, 2, 3], [3, 4, 5], [5, 6, 7], [7, 8, 9]]
-pub fn window<T>(array []T, attr WindowAttribute) [][]T {
+pub fn window[T](array []T, attr WindowAttribute) [][]T {
 	// allocate snapshot array
 	mut windows := [][]T{cap: array.len - attr.size + 1}
 
@@ -200,7 +200,7 @@ pub fn window<T>(array []T, attr WindowAttribute) [][]T {
 // which means you can only pass array of numbers for now.
 // TODO: Fix generic operator overloading detection issue.
 // Example: arrays.sum<int>([1, 2, 3, 4, 5])? // => 15
-pub fn sum<T>(array []T) !T {
+pub fn sum[T](array []T) !T {
 	if array.len == 0 {
 		return error('Cannot sum up array of nothing.')
 	} else {
@@ -223,7 +223,7 @@ pub fn sum<T>(array []T) !T {
 // returns an error if the array is empty.
 // See also: [fold](#fold).
 // Example: arrays.reduce([1, 2, 3, 4, 5], fn (t1 int, t2 int) int { return t1 * t2 })! // => 120
-pub fn reduce<T>(array []T, reduce_op fn (acc T, elem T) T) !T {
+pub fn reduce[T](array []T, reduce_op fn (acc T, elem T) T) !T {
 	if array.len == 0 {
 		return error('Cannot reduce array of nothing.')
 	} else {
@@ -245,7 +245,7 @@ pub fn reduce<T>(array []T, reduce_op fn (acc T, elem T) T) !T {
 // returns the accumulated value in `acc`.
 // returns an error if the array is empty.
 // See also: [fold_indexed](#fold_indexed).
-pub fn reduce_indexed<T>(array []T, reduce_op fn (idx int, acc T, elem T) T) !T {
+pub fn reduce_indexed[T](array []T, reduce_op fn (idx int, acc T, elem T) T) !T {
 	if array.len == 0 {
 		return error('Cannot reduce array of nothing.')
 	} else {
@@ -265,7 +265,7 @@ pub fn reduce_indexed<T>(array []T, reduce_op fn (idx int, acc T, elem T) T) !T 
 
 // filter_indexed filters elements based on `predicate` function
 // being invoked on each element with its index in the original array.
-pub fn filter_indexed<T>(array []T, predicate fn (idx int, elem T) bool) []T {
+pub fn filter_indexed[T](array []T, predicate fn (idx int, elem T) bool) []T {
 	mut result := []T{cap: array.len}
 
 	for i, e in array {
@@ -287,7 +287,7 @@ pub fn filter_indexed<T>(array []T, predicate fn (idx int, elem T) bool) []T {
 // 	fn (r int, t string) int { return r + t.len })
 // assert r == 5
 // ```
-pub fn fold<T, R>(array []T, init R, fold_op fn (acc R, elem T) R) R {
+pub fn fold[T, R](array []T, init R, fold_op fn (acc R, elem T) R) R {
 	mut value := init
 
 	for e in array {
@@ -299,7 +299,7 @@ pub fn fold<T, R>(array []T, init R, fold_op fn (acc R, elem T) R) R {
 
 // fold_indexed sets `acc = init`, then successively calls `acc = fold_op(idx, acc, elem)` for each element in `array`.
 // returns `acc`.
-pub fn fold_indexed<T, R>(array []T, init R, fold_op fn (idx int, acc R, elem T) R) R {
+pub fn fold_indexed[T, R](array []T, init R, fold_op fn (idx int, acc R, elem T) R) R {
 	mut value := init
 
 	for i, e in array {
@@ -311,7 +311,7 @@ pub fn fold_indexed<T, R>(array []T, init R, fold_op fn (idx int, acc R, elem T)
 
 // flatten flattens n + 1 dimensional array into n dimensional array
 // Example: arrays.flatten<int>([[1, 2, 3], [4, 5]]) // => [1, 2, 3, 4, 5]
-pub fn flatten<T>(array [][]T) []T {
+pub fn flatten[T](array [][]T) []T {
 	// calculate required capacity
 	mut required_size := 0
 
@@ -335,7 +335,7 @@ pub fn flatten<T>(array [][]T) []T {
 
 // flat_map creates a new array populated with the flattened result of calling transform function
 // being invoked on each element of `list`.
-pub fn flat_map<T, R>(array []T, transform fn (elem T) []R) []R {
+pub fn flat_map[T, R](array []T, transform fn (elem T) []R) []R {
 	mut result := [][]R{cap: array.len}
 
 	for v in array {
@@ -347,7 +347,7 @@ pub fn flat_map<T, R>(array []T, transform fn (elem T) []R) []R {
 
 // flat_map_indexed creates a new array populated with the flattened result of calling the `transform` function
 // being invoked on each element with its index in the original array.
-pub fn flat_map_indexed<T, R>(array []T, transform fn (idx int, elem T) []R) []R {
+pub fn flat_map_indexed[T, R](array []T, transform fn (idx int, elem T) []R) []R {
 	mut result := [][]R{cap: array.len}
 
 	for i, v in array {
@@ -359,7 +359,7 @@ pub fn flat_map_indexed<T, R>(array []T, transform fn (idx int, elem T) []R) []R
 
 // map_indexed creates a new array populated with the result of calling the `transform` function
 // being invoked on each element with its index in the original array.
-pub fn map_indexed<T, R>(array []T, transform fn (idx int, elem T) R) []R {
+pub fn map_indexed[T, R](array []T, transform fn (idx int, elem T) R) []R {
 	mut result := []R{cap: array.len}
 
 	for i, v in array {
@@ -371,7 +371,7 @@ pub fn map_indexed<T, R>(array []T, transform fn (idx int, elem T) R) []R {
 
 // group_by groups together elements, for which the `grouping_op` callback produced the same result.
 // Example: arrays.group_by<int, string>(['H', 'el', 'lo'], fn (v string) int { return v.len }) // => {1: ['H'], 2: ['el', 'lo']}
-pub fn group_by<K, V>(array []V, grouping_op fn (val V) K) map[K][]V {
+pub fn group_by[K, V](array []V, grouping_op fn (val V) K) map[K][]V {
 	mut result := map[K][]V{}
 
 	for v in array {
@@ -394,7 +394,7 @@ pub fn group_by<K, V>(array []V, grouping_op fn (val V) K) map[K][]V {
 // Example: arrays.concat([1, 2, 3], 4, 5, 6) == [1, 2, 3, 4, 5, 6] // => true
 // Example: arrays.concat([1, 2, 3], ...[4, 5, 6]) == [1, 2, 3, 4, 5, 6] // => true
 // Example: arr << [4, 5, 6] // does what you need if arr is mutable
-pub fn concat<T>(a []T, b ...T) []T {
+pub fn concat[T](a []T, b ...T) []T {
 	mut m := []T{cap: a.len + b.len}
 
 	m << a
@@ -405,7 +405,7 @@ pub fn concat<T>(a []T, b ...T) []T {
 
 // returns the smallest element >= val, requires `array` to be sorted
 // Example: arrays.lower_bound([2, 4, 6, 8], 3)? // => 4
-pub fn lower_bound<T>(array []T, val T) !T {
+pub fn lower_bound[T](array []T, val T) !T {
 	if array.len == 0 {
 		return error('.lower_bound called on an empty array')
 	}
@@ -428,7 +428,7 @@ pub fn lower_bound<T>(array []T, val T) !T {
 
 // returns the largest element <= val, requires `array` to be sorted
 // Example: arrays.upper_bound([2, 4, 6, 8], 3)! // => 2
-pub fn upper_bound<T>(array []T, val T) !T {
+pub fn upper_bound[T](array []T, val T) !T {
 	if array.len == 0 {
 		return error('.upper_bound called on an empty array')
 	}
@@ -453,7 +453,7 @@ pub fn upper_bound<T>(array []T, val T) !T {
 // Binary searches on sorted lists can be faster than other array searches because at maximum
 // the algorithm only has to traverse log N elements
 // Example: arrays.binary_search([1, 2, 3, 4], 4)? // => 3
-pub fn binary_search<T>(array []T, target T) !int {
+pub fn binary_search[T](array []T, target T) !int {
 	mut left := 0
 	mut right := array.len - 1
 	for ; left <= right; {
@@ -480,12 +480,12 @@ pub fn binary_search<T>(array []T, target T) !int {
 // arrays.rotate_left(mut x, 2)
 // println(x) // [3, 4, 5, 6, 1, 2]
 // ```
-pub fn rotate_left<T>(mut array []T, mid int) {
+pub fn rotate_left[T](mut array []T, mid int) {
 	assert mid <= array.len && mid >= 0
 	k := array.len - mid
 	p := &T(array.data)
 	unsafe {
-		ptr_rotate<T>(mid, &T(usize(voidptr(p)) + usize(sizeof(T)) * usize(mid)), k)
+		ptr_rotate[T](mid, &T(usize(voidptr(p)) + usize(sizeof(T)) * usize(mid)), k)
 	}
 }
 
@@ -498,28 +498,29 @@ pub fn rotate_left<T>(mut array []T, mid int) {
 // arrays.rotate_right(mut x, 2)
 // println(x) // [5, 6, 1, 2, 3, 4]
 // ```
-pub fn rotate_right<T>(mut array []T, k int) {
+pub fn rotate_right[T](mut array []T, k int) {
 	assert k <= array.len && k >= 0
 	mid := array.len - k
 	p := &T(array.data)
 	unsafe {
-		ptr_rotate<T>(mid, &T(usize(voidptr(p)) + usize(sizeof(T)) * usize(mid)), k)
+		ptr_rotate[T](mid, &T(usize(voidptr(p)) + usize(sizeof(T)) * usize(mid)), k)
 	}
 }
 
 [unsafe]
-fn ptr_rotate<T>(left_ int, mid &T, right_ int) {
+fn ptr_rotate[T](left_ int, mid &T, right_ int) {
+	sz := usize(sizeof(T))
 	mut left := usize(left_)
 	mut right := usize(right_)
+	limit := raw_array_cap[T]()
 	for {
 		delta := if left < right { left } else { right }
-
-		if delta <= raw_array_cap<T>() {
+		if delta <= usize(limit) {
 			break
 		}
 		unsafe {
-			swap_nonoverlapping<T>(&T(usize(voidptr(mid)) - left * usize(sizeof(T))),
-				&T(usize(voidptr(mid)) + usize(right - delta) * usize(sizeof(T))), int(delta))
+			swap_nonoverlapping[T](&T(usize(voidptr(mid)) - left * sz), &T(usize(voidptr(mid)) +
+				usize(right - delta) * sz), int(delta))
 		}
 		if left <= right {
 			right -= delta
@@ -527,21 +528,21 @@ fn ptr_rotate<T>(left_ int, mid &T, right_ int) {
 			left -= delta
 		}
 	}
-
 	unsafe {
-		sz := usize(sizeof(T))
-		rawarray := C.malloc(raw_array_malloc_size<T>())
+		rawarray := malloc(raw_array_malloc_size[T]())
+		defer {
+			free(rawarray)
+		}
 		dim := &T(usize(voidptr(mid)) - left * sz + right * sz)
 		if left <= right {
-			C.memcpy(rawarray, voidptr(usize(voidptr(mid)) - left * sz), left * sz)
-			C.memmove(voidptr(usize(voidptr(mid)) - left * sz), voidptr(mid), right * sz)
-			C.memcpy(voidptr(dim), rawarray, left * sz)
+			vmemcpy(rawarray, voidptr(usize(voidptr(mid)) - left * sz), isize(left * sz))
+			vmemmove(voidptr(usize(voidptr(mid)) - left * sz), voidptr(mid), isize(right * sz))
+			vmemcpy(voidptr(dim), rawarray, isize(left * sz))
 		} else {
-			C.memcpy(rawarray, voidptr(mid), right * sz)
-			C.memmove(voidptr(dim), voidptr(usize(voidptr(mid)) - left * sz), left * sz)
-			C.memcpy(voidptr(usize(voidptr(mid)) - left * sz), rawarray, right * sz)
+			vmemcpy(rawarray, voidptr(mid), isize(right * sz))
+			vmemmove(voidptr(dim), voidptr(usize(voidptr(mid)) - left * sz), isize(left * sz))
+			vmemcpy(voidptr(usize(voidptr(mid)) - left * sz), rawarray, isize(right * sz))
 		}
-		C.free(rawarray)
 	}
 }
 
@@ -561,60 +562,60 @@ mut:
 	w u64
 }
 
-const (
-	extra_size = 32 * sizeof(usize)
-)
+const extra_size = 32 * isize(sizeof(usize))
 
-fn raw_array_cap<T>() usize {
-	if sizeof(T) > arrays.extra_size {
+fn raw_array_cap[T]() isize {
+	size := isize(sizeof(T))
+	if size > arrays.extra_size {
 		return 1
 	} else {
-		return arrays.extra_size / sizeof(T)
+		return arrays.extra_size / size
 	}
 }
 
-fn raw_array_malloc_size<T>() usize {
-	if sizeof(T) > arrays.extra_size {
-		return usize(sizeof(T)) * 2
+fn raw_array_malloc_size[T]() isize {
+	size := isize(sizeof(T))
+	if size > arrays.extra_size {
+		return size * 2
 	} else {
-		return 32 * usize(sizeof(usize))
+		return arrays.extra_size
 	}
 }
 
 [unsafe]
 fn memswap(x voidptr, y voidptr, len usize) {
-	block_size := sizeof(Block)
+	block_size := isize(sizeof(Block))
 
 	mut i := usize(0)
-	for i + block_size <= len {
+	for i + usize(block_size) <= len {
 		mut t_ := Block{}
 		t := voidptr(&t_)
 
 		xi := usize(x) + i
 		yi := usize(y) + i
 		unsafe {
-			C.memcpy(t, voidptr(xi), block_size)
-			C.memcpy(voidptr(xi), voidptr(yi), block_size)
-			C.memcpy(t, voidptr(yi), block_size)
+			vmemcpy(t, voidptr(xi), block_size)
+			vmemcpy(voidptr(xi), voidptr(yi), block_size)
+			vmemcpy(t, voidptr(yi), block_size)
 		}
-		i += block_size
+		i += usize(block_size)
 	}
 	if i < len {
 		mut t_ := UnalignedBlock{}
 		t := voidptr(&t_)
-		rem := len - i
+		rem := isize(len - i)
 		xi := usize(x) + i
 		yi := usize(y) + i
 		unsafe {
-			C.memcpy(t, voidptr(xi), rem)
-			C.memcpy(voidptr(xi), voidptr(yi), rem)
-			C.memcpy(voidptr(yi), t, rem)
+			vmemcpy(t, voidptr(xi), rem)
+			vmemcpy(voidptr(xi), voidptr(yi), rem)
+			vmemcpy(voidptr(yi), t, rem)
 		}
 	}
 }
 
 [unsafe]
-fn swap_nonoverlapping<T>(x_ &T, y_ &T, count int) {
+fn swap_nonoverlapping[T](x_ &T, y_ &T, count int) {
 	x := voidptr(x_)
 	y := voidptr(y_)
 
@@ -627,13 +628,13 @@ fn swap_nonoverlapping<T>(x_ &T, y_ &T, count int) {
 // copy copies the `src` array elements to the `dst` array.
 // The number of the elements copied is the minimum of the length of both arrays.
 // Returns the number of elements copied.
-pub fn copy<T>(mut dst []T, src []T) int {
+pub fn copy[T](mut dst []T, src []T) int {
 	min := if dst.len < src.len { dst.len } else { src.len }
 	if min <= 0 {
 		return 0
 	}
-	if can_copy_bits<T>() {
-		blen := min * int(sizeof(T))
+	if can_copy_bits[T]() {
+		blen := min * isize(sizeof(T))
 		unsafe { vmemmove(&T(dst.data), src.data, blen) }
 	} else {
 		for i in 0 .. min {
@@ -646,7 +647,7 @@ pub fn copy<T>(mut dst []T, src []T) int {
 // determines if T can be copied using `memcpy`
 // false if autofree needs to intervene
 // false if type is not copyable e.g. map
-fn can_copy_bits<T>() bool {
+fn can_copy_bits[T]() bool {
 	// references, C pointers, integers, floats, runes
 	if T.name[0] in [`&`, `b`, `c`, `f`, `i`, `r`, `u`, `v`] {
 		return true
@@ -657,8 +658,9 @@ fn can_copy_bits<T>() bool {
 // carray_to_varray copies a C byte array into a V array of type `T`.
 // See also: `cstring_to_vstring`
 [unsafe]
-pub fn carray_to_varray<T>(c_array voidptr, c_array_len int) []T {
-	mut v_array := []T{len: c_array_len}
-	unsafe { vmemcpy(v_array.data, c_array, c_array_len * int(sizeof(T))) }
+pub fn carray_to_varray[T](c_array_data voidptr, items int) []T {
+	mut v_array := []T{len: items}
+	total_size := items * isize(sizeof(T))
+	unsafe { vmemcpy(v_array.data, c_array_data, total_size) }
 	return v_array
 }

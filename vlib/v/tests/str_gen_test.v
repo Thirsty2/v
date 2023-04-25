@@ -253,11 +253,11 @@ fn test_map_with_struct() {
 
 struct ForGeneric {}
 
-fn generic_fn_interpolation<T>(p T) string {
+fn generic_fn_interpolation[T](p T) string {
 	return '${p}'
 }
 
-fn generic_fn_str<T>(p T) string {
+fn generic_fn_str[T](p T) string {
 	return p.str()
 }
 
@@ -307,33 +307,33 @@ fn test_alias_struct() {
 	assert '${t}' == 'TestAlias(TestStruct{\n    x: 0\n})'
 }
 
-struct GenericStruct<T> {
+struct GenericStruct[T] {
 	x T
 }
 
 fn test_generic_struct() {
-	x := GenericStruct<TestStruct>{}
-	assert '${x}' == 'GenericStruct<TestStruct>{\n    x: TestStruct{\n        x: 0\n    }\n}'
-	assert x.str() == 'GenericStruct<TestStruct>{\n    x: TestStruct{\n        x: 0\n    }\n}'
+	x := GenericStruct[TestStruct]{}
+	assert '${x}' == 'GenericStruct[TestStruct]{\n    x: TestStruct{\n        x: 0\n    }\n}'
+	assert x.str() == 'GenericStruct[TestStruct]{\n    x: TestStruct{\n        x: 0\n    }\n}'
 }
 
-struct MultiGenericStruct<T, X> {
+struct MultiGenericStruct[T, X] {
 	t T
 	x X
 }
 
 fn test_multi_generic_struct() {
-	x := MultiGenericStruct<TestStruct, TestStruct>{}
-	assert '${x}' == 'MultiGenericStruct<TestStruct, TestStruct>{\n    t: TestStruct{\n        x: 0\n    }\n    x: TestStruct{\n        x: 0\n    }\n}'
-	assert x.str() == 'MultiGenericStruct<TestStruct, TestStruct>{\n    t: TestStruct{\n        x: 0\n    }\n    x: TestStruct{\n        x: 0\n    }\n}'
+	x := MultiGenericStruct[TestStruct, TestStruct]{}
+	assert '${x}' == 'MultiGenericStruct[TestStruct, TestStruct]{\n    t: TestStruct{\n        x: 0\n    }\n    x: TestStruct{\n        x: 0\n    }\n}'
+	assert x.str() == 'MultiGenericStruct[TestStruct, TestStruct]{\n    t: TestStruct{\n        x: 0\n    }\n    x: TestStruct{\n        x: 0\n    }\n}'
 }
 
-fn create_option_err() ?string {
+fn create_option_err() !string {
 	return error('this is an error')
 }
 
-fn test_option_err() {
-	assert '${create_option_err()}' == 'Option(error: this is an error)'
+fn test_result_err() {
+	assert '${create_option_err()}' == 'Result(error: this is an error)'
 }
 
 fn create_option_none() ?string {
@@ -341,7 +341,7 @@ fn create_option_none() ?string {
 }
 
 fn test_option_none() {
-	assert '${create_option_none()}' == 'Option(error: none)'
+	assert '${create_option_none()}' == 'Option(none)'
 }
 
 fn create_option_string() ?string {
@@ -458,7 +458,7 @@ fn test_c_struct_typedef() {
 		}
 		assert c.str() == r'CTypeDefStruct{
     mutex: &sync.Mutex{
-        mutex: pthread_mutex_t{}
+        mutex: C.pthread_mutex_t{}
     }
 }'
 	}

@@ -18,7 +18,7 @@ fn test_simple() {
 	x := Employee{'Peter', 28, 95000.5, .worker}
 	s := json.encode(x)
 	// eprintln('Employee x: $s')
-	assert s == '{"name":"Peter","age":28,"salary":95000.5,"title":2}'
+	assert s == '{"name":"Peter","age":28,"salary":95000.5,"title":"worker"}'
 	y := json.decode(Employee, s)!
 	// eprintln('Employee y: $y')
 	assert y.name == 'Peter'
@@ -95,18 +95,19 @@ fn test_encode_decode_sumtype() {
 	enc := json.encode(game)
 	// eprintln('Encoded Game: $enc')
 
-	assert enc == '{"title":"Super Mega Game","player":{"name":"Monke","_type":"Human"},"other":[{"tag":"Pen","_type":"Item"},{"tag":"Cookie","_type":"Item"},1,"Stool",{"_type":"Time","value":${t.unix_time()}}]}'
+	assert enc == '{"title":"Super Mega Game","player":{"name":"Monke","_type":"Human"},"other":[{"tag":"Pen","_type":"Item"},{"tag":"Cookie","_type":"Item"},"cat","Stool",{"_type":"Time","value":${t.unix_time()}}]}'
 
 	dec := json.decode(SomeGame, enc)!
 	// eprintln('Decoded Game: $dec')
 
 	assert game.title == dec.title
 	assert game.player == dec.player
-	assert (game.other[2] as Animal) == (dec.other[2] as Animal)
+	assert (game.other[2] as Animal) == .cat
+	assert dec.other[2] == Entity('cat')
 	assert (game.other[4] as time.Time).unix_time() == (dec.other[4] as time.Time).unix_time()
 }
 
-fn bar<T>(payload string) !Bar { // ?T doesn't work currently
+fn bar[T](payload string) !Bar { // ?T doesn't work currently
 	result := json.decode(T, payload)!
 	return result
 }
@@ -116,7 +117,7 @@ struct Bar {
 }
 
 fn test_generic() {
-	result := bar<Bar>('{"x":"test"}') or { Bar{} }
+	result := bar[Bar]('{"x":"test"}') or { Bar{} }
 	assert result.x == 'test'
 }
 
@@ -332,17 +333,17 @@ fn test_nested_type() {
 	}
 }
 
-struct Foo<T> {
+struct Foo[T] {
 pub:
 	name string
 	data T
 }
 
 fn test_generic_struct() {
-	foo_int := Foo<int>{'bar', 12}
+	foo_int := Foo[int]{'bar', 12}
 	foo_enc := json.encode(foo_int)
 	assert foo_enc == '{"name":"bar","data":12}'
-	foo_dec := json.decode(Foo<int>, foo_enc)!
+	foo_dec := json.decode(Foo[int], foo_enc)!
 	assert foo_dec.name == 'bar'
 	assert foo_dec.data == 12
 }
@@ -371,20 +372,23 @@ fn test_errors() {
 }
 
 type ID = string
+type GG = int
 
 struct Message {
 	id ID
+	ij GG
 }
 
 fn test_decode_alias_struct() {
 	msg := json.decode(Message, '{"id": "118499178790780929"}')!
 	// hacky way of comparing aliased strings
 	assert msg.id.str() == '118499178790780929'
+	assert msg.ij.str() == '0'
 }
 
 fn test_encode_alias_struct() {
-	expected := '{"id":"118499178790780929"}'
-	msg := Message{'118499178790780929'}
+	expected := '{"id":"118499178790780929","ij":999998888}'
+	msg := Message{'118499178790780929', 999998888}
 	out := json.encode(msg)
 	assert out == expected
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module sync
@@ -32,6 +32,9 @@ fn C.pthread_cond_destroy(voidptr) int
 
 [typedef]
 struct C.pthread_mutex_t {}
+
+[typedef]
+struct C.pthread_cond_t {}
 
 [typedef]
 struct C.pthread_rwlock_t {}

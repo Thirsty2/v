@@ -281,11 +281,11 @@ pub fn (t Time) long_weekday_str() string {
 
 // is_leap_year checks if a given a year is a leap year.
 pub fn is_leap_year(year int) bool {
-	return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
+	return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 // days_in_month returns a number of days in a given month.
-pub fn days_in_month(month int, year int) ?int {
+pub fn days_in_month(month int, year int) !int {
 	if month > 12 || month < 1 {
 		return error('Invalid month: ${month}')
 	}
@@ -400,4 +400,52 @@ pub fn offset() int {
 	t := utc()
 	local := t.local()
 	return int(local.unix - t.unix)
+}
+
+// local_to_utc converts the receiver `t` to the corresponding UTC time, if it contains local time.
+// If the receiver already does contain UTC time, it returns it unchanged.
+pub fn (t Time) local_to_utc() Time {
+	if !t.is_local {
+		return t
+	}
+	return Time{
+		...t.add(-offset() * time.second)
+		is_local: false
+	}
+}
+
+// utc_to_local converts the receiver `u` to the corresponding local time, if it contains UTC time.
+// If the receiver already does contain local time, it returns it unchanged.
+pub fn (u Time) utc_to_local() Time {
+	if u.is_local {
+		return u
+	}
+	return Time{
+		...u.add(offset() * time.second)
+		is_local: true
+	}
+}
+
+// as_local returns the exact same time, as the receiver `t`, but with its .is_local field set to true.
+// See also #Time.utc_to_local .
+pub fn (t Time) as_local() Time {
+	return Time{
+		...t
+		is_local: true
+	}
+}
+
+// as_utc returns the exact same time, as the receiver `t`, but with its .is_local field set to false.
+// See also #Time.local_to_utc .
+pub fn (t Time) as_utc() Time {
+	return Time{
+		...t
+		is_local: false
+	}
+}
+
+// is_utc returns true, when the receiver `t` is a UTC time, and false otherwise.
+// See also #Time.utc_to_local .
+pub fn (t Time) is_utc() bool {
+	return !t.is_local
 }

@@ -8,14 +8,13 @@ import strings
 import sync
 import runtime
 import v.doc
-import v.pref
 import v.vmod
 import json
 import term
 
 const (
 	allowed_formats = ['md', 'markdown', 'json', 'text', 'stdout', 'html', 'htm']
-	vexe            = pref.vexe_path()
+	vexe            = os.getenv_opt('VEXE') or { @VEXE }
 	vroot           = os.dir(vexe)
 	tabs            = ['\t\t', '\t\t\t\t\t\t', '\t\t\t\t\t\t\t']
 )
@@ -201,7 +200,7 @@ fn (vd VDoc) work_processor(mut work sync.Channel, mut wg sync.WaitGroup) {
 
 fn (vd VDoc) render_parallel(out Output) {
 	vjobs := runtime.nr_jobs()
-	mut work := sync.new_channel<ParallelDoc>(u32(vd.docs.len))
+	mut work := sync.new_channel[ParallelDoc](u32(vd.docs.len))
 	mut wg := sync.new_waitgroup()
 	for i in 0 .. vd.docs.len {
 		p_doc := ParallelDoc{vd.docs[i], out}

@@ -28,7 +28,7 @@ fn (mut p Process) unix_spawn_process() int {
 	//
 	// Here, we are in the child process.
 	// It still shares file descriptors with the parent process,
-	// but it is otherwise independant and can do stuff *without*
+	// but it is otherwise independent and can do stuff *without*
 	// affecting the parent process.
 	//
 	if p.use_pgroup {
@@ -49,6 +49,15 @@ fn (mut p Process) unix_spawn_process() int {
 		fd_close(pipeset[0])
 		fd_close(pipeset[3])
 		fd_close(pipeset[5])
+	}
+	if p.work_folder != '' {
+		if !is_abs_path(p.filename) {
+			// Ensure p.filename contains an absolute path, so it
+			// can be located reliably, even after changing the
+			// current folder in the child process:
+			p.filename = abs_path(p.filename)
+		}
+		chdir(p.work_folder) or {}
 	}
 	execve(p.filename, p.args, p.env) or {
 		eprintln(err)

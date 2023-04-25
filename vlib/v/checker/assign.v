@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module checker
 
@@ -6,10 +6,13 @@ import v.ast
 import v.pref
 
 // TODO 600 line function
-pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
+fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
+	prev_inside_assign := c.inside_assign
+	c.inside_assign = true
 	c.expected_type = ast.none_type // TODO a hack to make `x := if ... work`
 	defer {
 		c.expected_type = ast.void_type
+		c.inside_assign = prev_inside_assign
 	}
 	is_decl := node.op == .decl_assign
 	right_first := node.right[0]
@@ -18,7 +21,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 	mut right_type0 := ast.void_type
 	for i, mut right in node.right {
 		if right in [ast.CallExpr, ast.IfExpr, ast.LockExpr, ast.MatchExpr, ast.DumpExpr,
-			ast.SelectorExpr] {
+			ast.SelectorExpr, ast.ParExpr] {
 			if right in [ast.IfExpr, ast.MatchExpr] && node.left.len == node.right.len && !is_decl
 				&& node.left[i] in [ast.Ident, ast.SelectorExpr] && !node.left[i].is_blank_ident() {
 				c.expected_type = c.expr(node.left[i])
@@ -56,13 +59,18 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 				c.error('unexpected `mut` on right-hand side of assignment', right.mut_pos)
 			}
 		}
-		if mut right is ast.None {
+		if is_decl && mut right is ast.None {
 			c.error('cannot assign a `none` value to a variable', right.pos)
 		}
 		// Handle `left_name := unsafe { none }`
 		if mut right is ast.UnsafeExpr {
 			if mut right.expr is ast.None {
 				c.error('cannot use `none` in `unsafe` blocks', right.expr.pos)
+			}
+		}
+		if mut right is ast.AnonFn {
+			if right.decl.generic_names.len > 0 {
+				c.error('cannot assign generic function to a variable', right.decl.pos)
 			}
 		}
 	}
@@ -74,6 +82,21 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 			}
 			c.error('assignment mismatch: ${node.left.len} variable(s) but `${right_first.name}()` returns ${right_len} value(s)',
 				node.pos)
+		} else if right_first is ast.ParExpr {
+			mut right_next := right_first
+			for {
+				if mut right_next.expr is ast.CallExpr {
+					if right_next.expr.return_type == ast.void_type {
+						c.error('assignment mismatch: expected ${node.left.len} value(s) but `${right_next.expr.name}()` returns ${right_len} value(s)',
+							node.pos)
+					}
+					break
+				} else if mut right_next.expr is ast.ParExpr {
+					right_next = right_next.expr
+				} else {
+					break
+				}
+			}
 		} else {
 			c.error('assignment mismatch: ${node.left.len} variable(s) ${right_len} value(s)',
 				node.pos)
@@ -100,11 +123,20 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 		}
 		is_blank_ident := left.is_blank_ident()
 		mut left_type := ast.void_type
+		mut var_option := false
 		if !is_decl && !is_blank_ident {
 			if left in [ast.Ident, ast.SelectorExpr] {
 				c.prevent_sum_type_unwrapping_once = true
 			}
+			if left is ast.IndexExpr {
+				c.is_index_assign = true
+			}
 			left_type = c.expr(left)
+			c.is_index_assign = false
+			c.expected_type = c.unwrap_generic(left_type)
+		}
+		if c.inside_comptime_for_field && mut left is ast.ComptimeSelector {
+			left_type = c.comptime_fields_default_type
 			c.expected_type = c.unwrap_generic(left_type)
 		}
 		if node.right_types.len < node.left.len { // first type or multi return types added above
@@ -132,6 +164,9 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 						right_type = obj.typ
 					}
 				}
+			}
+			if right.or_expr.kind in [.propagate_option, .block] {
+				right_type = right_type.clear_flag(.option)
 			}
 		} else if right is ast.ComptimeSelector {
 			right_type = c.comptime_fields_default_type
@@ -176,7 +211,15 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 		} else {
 			// Make sure the variable is mutable
 			c.fail_if_immutable(left)
+
+			if !is_blank_ident && !left_type.has_flag(.option) && right_type.has_flag(.option) {
+				c.error('cannot assign an Option value to a non-option variable', right.pos())
+			}
 			// left_type = c.expr(left)
+			// if right is ast.None && !left_type.has_flag(.option) {
+			// 	println(left_type)
+			// 	c.error('cannot assign a `none` value to a non-option variable', right.pos())
+			// }
 		}
 		if right_type.is_ptr() && left_type.is_ptr() {
 			if mut right is ast.Ident {
@@ -255,6 +298,9 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 					if ident_var_info.share == .atomic_t {
 						left_type = left_type.set_flag(.atomic_f)
 					}
+					if ident_var_info.is_option {
+						var_option = true
+					}
 					node.left_types[i] = left_type
 					ident_var_info.typ = left_type
 					left.info = ident_var_info
@@ -273,13 +319,27 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 								if left_type in ast.unsigned_integer_type_idxs {
 									if mut right is ast.IntegerLiteral {
 										if right.val[0] == `-` {
-											c.error('Cannot assign negative value to unsigned integer type',
+											c.error('cannot assign negative value to unsigned integer type',
 												right.pos)
 										}
 									}
 								}
 								if right is ast.ComptimeSelector {
-									left.obj.is_comptime_field = true
+									left.obj.ct_type_var = .field_var
+									left.obj.typ = c.comptime_fields_default_type
+								} else if right is ast.Ident
+									&& (right as ast.Ident).obj is ast.Var && (right as ast.Ident).or_expr.kind == .absent {
+									if ((right as ast.Ident).obj as ast.Var).ct_type_var != .no_comptime {
+										ctyp := c.get_comptime_var_type(right)
+										if ctyp != ast.void_type {
+											left.obj.ct_type_var = ((right as ast.Ident).obj as ast.Var).ct_type_var
+											left.obj.typ = ctyp
+										}
+									}
+								} else if right is ast.DumpExpr
+									&& (right as ast.DumpExpr).expr is ast.ComptimeSelector {
+									left.obj.ct_type_var = .field_var
+									left.obj.typ = c.comptime_fields_default_type
 								}
 							}
 							ast.GlobalField {
@@ -294,6 +354,10 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 							if obj is ast.ConstField {
 								c.warn('duplicate of a const name `${full_name}`', left.pos)
 							}
+						}
+						// Check if variable name is already registered as imported module symbol
+						if c.check_import_sym_conflict(left.name) {
+							c.error('duplicate of an import symbol `${left.name}`', left.pos)
 						}
 					}
 				}
@@ -324,7 +388,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 				if left_type in ast.unsigned_integer_type_idxs {
 					if mut right is ast.IntegerLiteral {
 						if right.val[0] == `-` {
-							c.error('Cannot assign negative value to unsigned integer type',
+							c.error('cannot assign negative value to unsigned integer type',
 								right.pos)
 						}
 					}
@@ -408,7 +472,7 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 			}
 		}
 		if left_sym.kind == .map && node.op in [.assign, .decl_assign] && right_sym.kind == .map
-			&& !left.is_blank_ident() && right.is_lvalue()
+			&& !left.is_blank_ident() && right.is_lvalue() && right !is ast.ComptimeSelector
 			&& (!right_type.is_ptr() || (right is ast.Ident && right.is_auto_deref_var())) {
 			// Do not allow `a = b`
 			c.error('cannot copy map: call `move` or `clone` method (or use a reference)',
@@ -433,7 +497,9 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 					rtype = rtype.deref()
 				}
 				right_name := c.table.type_to_str(rtype)
-				c.error('mismatched types `${left_name}` and `${right_name}`', node.pos)
+				if !(left_type.has_flag(.option) && right_type == ast.none_type) {
+					c.error('mismatched types `${left_name}` and `${right_name}`', node.pos)
+				}
 			}
 		}
 		// Single side check
@@ -544,7 +610,9 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 			right_name := c.table.type_to_str(right_type_unwrapped)
 			parent_sym := c.table.final_sym(left_type_unwrapped)
 			if left_sym.kind == .alias && right_sym.kind != .alias {
-				c.error('mismatched types `${left_name}` and `${right_name}`', node.pos)
+				if !parent_sym.is_primitive() {
+					c.error('mismatched types `${left_name}` and `${right_name}`', node.pos)
+				}
 			}
 			extracted_op := match node.op {
 				.plus_assign { '+' }
@@ -563,15 +631,14 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 						node.pos)
 				}
 			} else {
-				if parent_sym.is_primitive() {
-					c.error('cannot use operator methods on type alias for `${parent_sym.name}`',
-						node.pos)
-				}
-				if left_name == right_name {
-					c.error('undefined operation `${left_name}` ${extracted_op} `${right_name}`',
-						node.pos)
-				} else {
-					c.error('mismatched types `${left_name}` and `${right_name}`', node.pos)
+				if !parent_sym.is_primitive() {
+					if left_name == right_name {
+						c.error('undefined operation `${left_name}` ${extracted_op} `${right_name}`',
+							node.pos)
+					} else {
+						c.error('mismatched types `${left_name}` and `${right_name}`',
+							node.pos)
+					}
 				}
 			}
 		}
@@ -588,7 +655,18 @@ pub fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 							node.pos)
 					}
 				} else {
-					c.error('cannot assign to `${left}`: ${err.msg()}', right.pos())
+					// allow `t.$(field.name) = 0` where `t.$(field.name)` is a enum
+					if c.inside_comptime_for_field && left is ast.ComptimeSelector {
+						field_sym := c.table.sym(c.unwrap_generic(c.comptime_fields_default_type))
+
+						if field_sym.kind == .enum_ && !right_type.is_int() {
+							c.error('enums can only be assigned `int` values', right.pos())
+						}
+					} else {
+						if !var_option || (var_option && right_type_unwrapped != ast.none_type) {
+							c.error('cannot assign to `${left}`: ${err.msg()}', right.pos())
+						}
+					}
 				}
 			}
 		}

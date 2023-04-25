@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 [has_globals]
@@ -107,15 +107,35 @@ pub:
 	typ         int
 }
 
+pub struct EnumData {
+pub:
+	name  string
+	value i64
+}
+
 // FieldData holds information about a field. Fields reside on structs.
 pub struct FieldData {
 pub:
-	name      string
-	attrs     []string
-	is_pub    bool
-	is_mut    bool
-	is_shared bool
-	typ       int
+	name          string // the name of the field f
+	typ           int    // the internal TypeID of the field f,
+	unaliased_typ int    // if f's type was an alias of int, this will be TypeID(int)
+	//
+	attrs  []string // the attributes of the field f
+	is_pub bool     // f is in a `pub:` section
+	is_mut bool     // f is in a `mut:` section
+	//
+	is_shared bool // `f shared Abc`
+	is_atomic bool // `f atomic int` , TODO
+	is_option bool // `f ?string` , TODO
+	//
+	is_array  bool // `f []string` , TODO
+	is_map    bool // `f map[string]int` , TODO
+	is_chan   bool // `f chan int` , TODO
+	is_enum   bool // `f Enum` where Enum is an enum
+	is_struct bool // `f Abc` where Abc is a struct , TODO
+	is_alias  bool // `f MyInt` where `type MyInt = int`, TODO
+	//
+	indirections u8 // 0 for `f int`, 1 for `f &int`, 2 for `f &&int` , TODO
 }
 
 pub enum AttributeKind {
@@ -131,15 +151,4 @@ pub:
 	has_arg bool
 	arg     string
 	kind    AttributeKind
-}
-
-[markused]
-fn v_segmentation_fault_handler(signal int) {
-	eprintln('signal 11: segmentation fault')
-	$if use_libbacktrace ? {
-		eprint_libbacktrace(1)
-	} $else {
-		print_backtrace()
-	}
-	exit(128 + 11)
 }

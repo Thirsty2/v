@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module pref
@@ -112,7 +112,7 @@ pub fn (mut p Preferences) fill_with_defaults() {
 	}
 	if p.os == ._auto {
 		// No OS specifed? Use current system
-		p.os = get_host_os()
+		p.os = if p.backend != .wasm { get_host_os() } else { .wasi }
 	}
 	//
 	p.try_to_use_tcc_by_default()
@@ -285,6 +285,9 @@ pub fn (p &Preferences) vcross_compiler_name() string {
 		return 'clang'
 	}
 	if p.os == .wasm32_emscripten {
+		if os.user_os() == 'windows' {
+			return 'emcc.bat'
+		}
 		return 'emcc'
 	}
 	if p.backend == .c && !p.out_name.ends_with('.c') {

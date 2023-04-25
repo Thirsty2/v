@@ -23,7 +23,7 @@ mut:
 
 // building a map of with all edges etc of a graph, represented from a matrix adjacency
 // Input: matrix adjacency --> Output: edges list of src, dest and weight
-fn build_map_edges_from_graph<T>(g [][]T) map[T]EDGE {
+fn build_map_edges_from_graph[T](g [][]T) map[T]EDGE {
 	n := g.len // TOTAL OF NODES for this graph -- its dimmension
 	mut edges_map := map[int]EDGE{} // a graph represented by map of edges
 
@@ -52,7 +52,7 @@ fn print_sol(dist []int) {
 // The main function that finds shortest distances from src
 // to all other vertices using Bellman-Ford algorithm.  The
 // function also detects negative weight cycle
-fn bellman_ford<T>(graph [][]T, src int) {
+fn bellman_ford[T](graph [][]T, src int) {
 	mut edges := build_map_edges_from_graph(graph)
 	// this function was done to adapt a graph representation
 	// by a adjacency matrix, to list of adjacency (using a MAP)
@@ -74,7 +74,7 @@ fn bellman_ford<T>(graph [][]T, src int) {
 			mut u := edges[j].src
 			mut v := edges[j].dest
 			mut weight := edges[j].weight
-			if (dist[u] != large) && (dist[u] + weight < dist[v]) {
+			if dist[u] != large && dist[u] + weight < dist[v] {
 				dist[v] = dist[u] + weight
 			}
 		}
@@ -88,7 +88,7 @@ fn bellman_ford<T>(graph [][]T, src int) {
 		mut u := edges[j].src
 		mut v := edges[j].dest
 		mut weight := edges[j].weight
-		if (dist[u] != large) && (dist[u] + weight < dist[v]) {
+		if dist[u] != large && dist[u] + weight < dist[v] {
 			print('\n Graph contains negative weight cycle')
 			// If negative cycle is detected, simply
 			// return or an exit(1)

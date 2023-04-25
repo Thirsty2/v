@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module parser
@@ -113,8 +113,8 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 			p.check(.decl_assign)
 			comments << p.eat_comments()
 			expr := p.expr(0)
-			if expr !in [ast.CallExpr, ast.IndexExpr, ast.PrefixExpr, ast.SelectorExpr] {
-				p.error_with_pos('if guard condition expression is illegal, it should return optional',
+			if expr !in [ast.CallExpr, ast.IndexExpr, ast.PrefixExpr, ast.SelectorExpr, ast.Ident] {
+				p.error_with_pos('if guard condition expression is illegal, it should return an Option',
 					expr.pos())
 			}
 			p.check_undefined_variables(var_names, expr) or {
@@ -267,6 +267,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 			// Expression match
 			for {
 				p.inside_match_case = true
+				mut range_pos := p.tok.pos()
 				expr := p.expr(0)
 				ecmnts << p.eat_comments()
 				p.inside_match_case = false
@@ -276,13 +277,15 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 					return ast.MatchExpr{}
 				} else if p.tok.kind == .ellipsis {
 					p.next()
+					p.inside_match_case = true
 					expr2 := p.expr(0)
+					p.inside_match_case = false
 					exprs << ast.RangeExpr{
 						low: expr
 						high: expr2
 						has_low: true
 						has_high: true
-						pos: p.tok.pos()
+						pos: range_pos.extend(p.prev_tok.pos())
 					}
 				} else {
 					exprs << expr

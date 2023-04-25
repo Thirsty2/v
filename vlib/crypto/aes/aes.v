@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 // Based off:   https://github.com/golang/go/blob/master/src/crypto/aes
@@ -22,6 +22,18 @@ struct AesCipher {
 mut:
 	enc []u32
 	dec []u32
+}
+
+// free the resources taken by the AesCipher `c`
+[unsafe]
+pub fn (mut c AesCipher) free() {
+	$if prealloc {
+		return
+	}
+	unsafe {
+		c.enc.free()
+		c.dec.free()
+	}
 }
 
 // new_cipher creates and returns a new [[AesCipher](#AesCipher)].

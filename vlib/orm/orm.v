@@ -1,39 +1,38 @@
 module orm
 
 import time
-import v.ast
 
 pub const (
-	num64    = [ast.i64_type_idx, ast.u64_type_idx]
-	nums     = [
-		ast.i8_type_idx,
-		ast.i16_type_idx,
-		ast.int_type_idx,
-		ast.u8_type_idx,
-		ast.u16_type_idx,
-		ast.u32_type_idx,
-		ast.bool_type_idx,
+	num64       = [typeof[i64]().idx, typeof[u64]().idx]
+	nums        = [
+		typeof[i8]().idx,
+		typeof[i16]().idx,
+		typeof[int]().idx,
+		typeof[u8]().idx,
+		typeof[u16]().idx,
+		typeof[u32]().idx,
+		typeof[bool]().idx,
 	]
-	float    = [
-		ast.f32_type_idx,
-		ast.f64_type_idx,
+	float       = [
+		typeof[f32]().idx,
+		typeof[f64]().idx,
 	]
-	string   = ast.string_type_idx
-	time     = -2
-	serial   = -1
-	type_idx = {
-		'i8':     ast.i8_type_idx
-		'i16':    ast.i16_type_idx
-		'int':    ast.int_type_idx
-		'i64':    ast.i64_type_idx
-		'u8':     ast.u8_type_idx
-		'u16':    ast.u16_type_idx
-		'u32':    ast.u32_type_idx
-		'u64':    ast.u64_type_idx
-		'f32':    ast.f32_type_idx
-		'f64':    ast.f64_type_idx
-		'bool':   ast.bool_type_idx
-		'string': ast.string_type_idx
+	type_string = typeof[string]().idx
+	time        = -2
+	serial      = -1
+	type_idx    = {
+		'i8':     typeof[i8]().idx
+		'i16':    typeof[i16]().idx
+		'int':    typeof[int]().idx
+		'i64':    typeof[i64]().idx
+		'u8':     typeof[u8]().idx
+		'u16':    typeof[u16]().idx
+		'u32':    typeof[u32]().idx
+		'u64':    typeof[u64]().idx
+		'f32':    typeof[f32]().idx
+		'f64':    typeof[f64]().idx
+		'bool':   typeof[bool]().idx
+		'string': typeof[string]().idx
 	}
 	string_max_len = 2048
 )
@@ -60,6 +59,7 @@ pub enum OperationKind {
 	lt // <
 	ge // >=
 	le // <=
+	orm_like // LIKE
 }
 
 pub enum MathOperationKind {
@@ -80,6 +80,11 @@ pub enum OrderType {
 	desc
 }
 
+pub enum SQLDialect {
+	default
+	sqlite
+}
+
 fn (kind OperationKind) to_str() string {
 	str := match kind {
 		.neq { '!=' }
@@ -88,6 +93,7 @@ fn (kind OperationKind) to_str() string {
 		.lt { '<' }
 		.ge { '>=' }
 		.le { '<=' }
+		.orm_like { 'LIKE' }
 	}
 	return str
 }
@@ -176,15 +182,15 @@ pub interface Connection {
 	delete(table string, where QueryData) !
 	create(table string, fields []TableField) !
 	drop(table string) !
-	last_id() Primitive
+	last_id() int
 }
 
 // Generates an sql stmt, from universal parameter
 // q - The quotes character, which can be different in every type, so it's variable
 // num - Stmt uses nums at prepared statements (? or ?1)
-// qm - Character for prepared statment, qm because of quotation mark like in sqlite
+// qm - Character for prepared statement, qm because of quotation mark like in sqlite
 // start_pos - When num is true, it's the start position of the counter
-pub fn orm_stmt_gen(table string, q string, kind StmtKind, num bool, qm string, start_pos int, data QueryData, where QueryData) (string, QueryData) {
+pub fn orm_stmt_gen(sql_dialect SQLDialect, table string, q string, kind StmtKind, num bool, qm string, start_pos int, data QueryData, where QueryData) (string, QueryData) {
 	mut str := ''
 	mut c := start_pos
 	mut data_fields := []string{}
@@ -218,11 +224,19 @@ pub fn orm_stmt_gen(table string, q string, kind StmtKind, num bool, qm string, 
 				c++
 			}
 
-			str += 'INSERT INTO ${q}${table}${q} ('
-			str += select_fields.join(', ')
-			str += ') VALUES ('
-			str += values.join(', ')
-			str += ')'
+			str += 'INSERT INTO ${q}${table}${q} '
+
+			are_values_empty := values.len == 0
+
+			if sql_dialect == .sqlite && are_values_empty {
+				str += 'DEFAULT VALUES'
+			} else {
+				str += '('
+				str += select_fields.join(', ')
+				str += ') VALUES ('
+				str += values.join(', ')
+				str += ')'
+			}
 		}
 		.update {
 			str += 'UPDATE ${q}${table}${q} SET '
@@ -293,6 +307,12 @@ pub fn orm_stmt_gen(table string, q string, kind StmtKind, num bool, qm string, 
 		}
 	}
 	str += ';'
+	$if trace_orm_stmt ? {
+		eprintln('> orm_stmt sql_dialect: ${sql_dialect} | table: ${table} | kind: ${kind} | query: ${str}')
+	}
+	$if trace_orm ? {
+		eprintln('> orm: ${str}')
+	}
 	return str, QueryData{
 		fields: data_fields
 		data: data_data
@@ -381,6 +401,12 @@ pub fn orm_select_gen(orm SelectConfig, q string, num bool, qm string, start_pos
 	}
 
 	str += ';'
+	$if trace_orm_query ? {
+		eprintln('> orm_query: ${str}')
+	}
+	$if trace_orm ? {
+		eprintln('> orm: ${str}')
+	}
 	return str
 }
 
@@ -503,6 +529,12 @@ pub fn orm_table_gen(table string, q string, defaults bool, def_unique_len int, 
 	fs << unique_fields
 	str += fs.join(', ')
 	str += ');'
+	$if trace_orm_create ? {
+		eprintln('> orm_create table: ${table} | query: ${str}')
+	}
+	$if trace_orm ? {
+		eprintln('> orm: ${str}')
+	}
 	return str
 }
 
@@ -560,6 +592,16 @@ pub fn i16_to_primitive(b i16) Primitive {
 }
 
 pub fn int_to_primitive(b int) Primitive {
+	return Primitive(b)
+}
+
+// int_literal_to_primitive handles int literal value
+pub fn int_literal_to_primitive(b int) Primitive {
+	return Primitive(b)
+}
+
+// float_literal_to_primitive handles float literal value
+pub fn float_literal_to_primitive(b f64) Primitive {
 	return Primitive(b)
 }
 

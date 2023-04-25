@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module builtin
@@ -84,7 +84,7 @@ pub fn utf8_str_len(s string) int {
 // valid utf8 in the string, and could result in
 // values greater than the utf32 spec
 // it has been replaced by `utf8_to_utf32` which
-// has an optional return type.
+// has an option return type.
 //
 // this function is left for backward compatibility
 // it is used in vlib/builtin/string.v,
@@ -98,7 +98,7 @@ pub fn (_rune string) utf32_code() int {
 
 // convert array of utf8 bytes to single utf32 value
 // will error if more than 4 bytes are submitted
-pub fn (_bytes []u8) utf8_to_utf32() ?rune {
+pub fn (_bytes []u8) utf8_to_utf32() !rune {
 	if _bytes.len == 0 {
 		return 0
 	}

@@ -123,6 +123,20 @@ pub fn cp(src string, dst string) ! {
 	}
 }
 
+pub fn rename(src string, dst string) ! {
+	$if js_node {
+		err := ''
+		#try {
+		#$fs.renameSync(src.str,dst.str);
+		#return;
+		#} catch (e) {
+		#err.str = 'failed to rename ' + src.str + ' to ' + dst.str + ': ' + e.toString();
+		#}
+
+		return error(err)
+	}
+}
+
 pub fn read_file(s string) !string {
 	mut err := ''
 	err = err
@@ -168,4 +182,10 @@ pub fn is_readable(path string) bool {
 	} $else {
 		return false
 	}
+}
+
+// get_long_path has no meaning for *nix, but has for windows, where `c:\folder\some~1` for example
+// can be the equivalent of `c:\folder\some spa ces`. On *nix, it just returns a copy of the input path.
+fn get_long_path(path string) !string {
+	return path
 }

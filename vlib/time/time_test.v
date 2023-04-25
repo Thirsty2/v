@@ -93,6 +93,14 @@ fn test_format_ss_milli() {
 	assert '1980-07-11 21:23:42.123' == time_to_test.format_ss_milli()
 }
 
+fn test_format_rfc3339() {
+	// assert '1980-07-11T19:23:42.123Z'
+	res := time_to_test.format_rfc3339()
+	assert res.ends_with('23:42.123Z')
+	assert res.starts_with('1980-07-1')
+	assert res.contains('T')
+}
+
 fn test_format_ss_micro() {
 	assert '11.07.1980 21:23:42.123456' == time_to_test.get_fmt_str(.dot, .hhmmss24_micro,
 		.ddmmyyyy)
@@ -277,4 +285,10 @@ fn test_add_seconds_to_time() {
 	now_tm := time.now()
 	future_tm := now_tm.add_seconds(60)
 	assert now_tm.unix < future_tm.unix
+}
+
+fn test_plus_equals_duration() {
+	mut d := time.second
+	d += time.second
+	assert d == 2 * time.second
 }

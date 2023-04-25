@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module builder
@@ -10,9 +10,11 @@ pub fn (mut v Builder) find_win_cc() ! {
 	$if !windows {
 		return
 	}
-	ccompiler_version_res := os.execute('${os.quoted_path(v.pref.ccompiler)} -v')
+	cmd_version := '${v.quote_compiler_name(v.pref.ccompiler)} -v'
+	ccompiler_version_res := os.execute(cmd_version)
 	if ccompiler_version_res.exit_code != 0 {
 		if v.pref.is_verbose {
+			println('failed command: `${cmd_version}`')
 			println('${v.pref.ccompiler} not found, looking for msvc...')
 		}
 		find_msvc(v.pref.m64) or {

@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module golang
@@ -9,11 +9,7 @@ import v.util
 import v.pref
 import os
 
-const (
-	bs      = '\\'
-	// when to break a line dependant on penalty
-	max_len = [0, 35, 60, 85, 93, 100]
-)
+const bs = '\\'
 
 pub struct Gen {
 pub mut:
@@ -49,10 +45,10 @@ pub mut:
 	nlines             int
 }
 
-pub fn gen(files []&ast.File, table &ast.Table, out_file string, pref &pref.Preferences) (int, int) {
+pub fn gen(files []&ast.File, table &ast.Table, out_file string, pref_ &pref.Preferences) (int, int) {
 	mut g := Gen{
 		table: table
-		pref: pref
+		pref: pref_
 		// is_debug: is_debug
 		out: strings.new_builder(1000)
 		out_imports: strings.new_builder(200)
@@ -251,7 +247,7 @@ pub fn (mut f Gen) mark_types_import_as_used(typ ast.Type) {
 			f.mark_types_import_as_used(concrete_typ)
 		}
 	}
-	name := sym.name.split('<')[0] // take `Type` from `Type<T>`
+	name := sym.name.split('[')[0] // take `Type` from `Type[T]`
 	f.mark_import_as_used(name)
 }
 
@@ -330,7 +326,7 @@ fn (f Gen) should_insert_newline_before_node(node ast.Node, prev_node ast.Node) 
 		stmt := node
 		prev_stmt := prev_node
 		// Force a newline after a block of HashStmts
-		if prev_stmt is ast.HashStmt && stmt !is ast.HashStmt && stmt !is ast.ExprStmt {
+		if prev_stmt is ast.HashStmt && stmt !in [ast.HashStmt, ast.ExprStmt] {
 			return true
 		}
 		// Force a newline after function declarations
@@ -655,14 +651,17 @@ pub fn (mut f Gen) expr(node_ ast.Expr) {
 		}
 		ast.ComptimeType {
 			match node.kind {
-				.array { f.write('\$Array') }
-				.struct_ { f.write('\$Struct') }
-				.iface { f.write('\$Interface') }
-				.map_ { f.write('\$Map') }
-				.int { f.write('\$Int') }
-				.float { f.write('\$Float') }
-				.sum_type { f.write('\$Sumtype') }
-				.enum_ { f.write('\$Enum') }
+				.array { f.write('\$array') }
+				.struct_ { f.write('\$struct') }
+				.iface { f.write('\$interface') }
+				.map_ { f.write('\$map') }
+				.int { f.write('\$int') }
+				.float { f.write('\$float') }
+				.sum_type { f.write('\$sumtype') }
+				.enum_ { f.write('\$enum') }
+				.alias { f.write('\$alias') }
+				.function { f.write('\$function') }
+				.option { f.write('\$option') }
 			}
 		}
 	}
@@ -1268,7 +1267,7 @@ pub fn (mut f Gen) fn_type_decl(node ast.FnTypeDecl) {
 		ret_str := f.no_cur_mod(f.table.type_to_str_using_aliases(fn_info.return_type,
 			f.mod2alias))
 		f.write(' ${ret_str}')
-	} else if fn_info.return_type.has_flag(.optional) {
+	} else if fn_info.return_type.has_flag(.option) {
 		f.write(' ?')
 	} else if fn_info.return_type.has_flag(.result) {
 		f.write(' !')

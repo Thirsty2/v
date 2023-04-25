@@ -1,34 +1,7 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module json2
-
-// `Any` is a sum type that lists the possible types to be decoded and used.
-pub type Any = Null | []Any | bool | f32 | f64 | i64 | int | map[string]Any | string | u64
-
-// `Null` struct is a simple representation of the `null` value in JSON.
-pub struct Null {
-	is_null bool = true
-}
-
-pub enum ValueKind {
-	unknown
-	array
-	object
-	string_
-	number
-}
-
-// str returns the string representation of the specific ValueKind
-pub fn (k ValueKind) str() string {
-	return match k {
-		.unknown { 'unknown' }
-		.array { 'array' }
-		.object { 'object' }
-		.string_ { 'string' }
-		.number { 'number' }
-	}
-}
 
 fn format_message(msg string, line int, column int) string {
 	return '[x.json2] ${msg} (${line}:${column})'
@@ -86,7 +59,7 @@ pub fn (err UnknownTokenError) msg() string {
 }
 
 struct Parser {
-mut:
+pub mut:
 	scanner      &Scanner = unsafe { nil }
 	p_tok        Token
 	tok          Token
@@ -140,7 +113,8 @@ fn new_parser(srce string, convert_type bool) Parser {
 	}
 }
 
-fn (mut p Parser) decode() !Any {
+// decode decodes provided JSON
+pub fn (mut p Parser) decode() !Any {
 	p.next()
 	p.next_with_err()!
 	fi := p.decode_value()!

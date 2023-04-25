@@ -444,20 +444,10 @@ fn (mut g Gen) jmp(addr i64) {
 */
 
 fn (mut g Gen) mov32(reg Register, val int) {
-	match reg {
-		.rax {
-			g.write8(0xb8)
-		}
-		.rdi {
-			g.write8(0xbf)
-		}
-		.rcx {
-			g.write8(0xb9)
-		}
-		else {
-			panic('unhandled mov32 ${reg}')
-		}
+	if int(reg) >= int(Register.r8) {
+		g.write8(0x41)
 	}
+	g.write8(0xb8 + int(reg) % 8)
 	g.write32(val)
 	g.println('mov32 ${reg}, ${val}')
 }
@@ -1324,27 +1314,14 @@ pub fn (mut a Amd64) gen_exit(mut g Gen, node ast.Expr) {
 }
 
 pub fn (mut g Gen) gen_amd64_exit(expr ast.Expr) {
-	// ret value
-	match expr {
-		ast.CallExpr {
-			right := expr.return_type
-			g.n_error('native exit builtin: Unsupported call ${right}')
-		}
-		ast.Ident {
-			g.mov_var_to_reg(.edi, expr as ast.Ident)
-		}
-		ast.IntegerLiteral {
-			g.mov(.edi, expr.val.int())
-		}
-		else {
-			g.n_error('native builtin exit expects a numeric argument')
-		}
-	}
+	g.expr(expr)
+	g.mov_reg(.rdi, .rax)
+
 	if g.pref.os == .windows {
 		g.mov_reg(.rcx, .rdi)
 		g.apicall('ExitProcess')
 	} else {
-		g.mov(.eax, g.nsyscall_exit())
+		g.mov(.rax, g.nsyscall_exit())
 		g.syscall()
 	}
 	g.trap() // should never be reached, just in case
@@ -1531,11 +1508,16 @@ fn (mut g Gen) mul_reg(a Register, b Register) {
 			g.write8(0xf7)
 			g.write8(0xeb)
 		}
+		.rdx {
+			g.write8(0x48)
+			g.write8(0xf7)
+			g.write8(0xe2)
+		}
 		else {
-			panic('unhandled div ${a}')
+			panic('unhandled mul ${b}')
 		}
 	}
-	g.println('mul ${a}')
+	g.println('mul ${b}')
 }
 
 fn (mut g Gen) imul_reg(r Register) {
@@ -1568,11 +1550,16 @@ fn (mut g Gen) div_reg(a Register, b Register) {
 			g.write8(0xf7)
 			g.write8(0xfb) // idiv ebx
 		}
+		.rdx {
+			g.write8(0x48)
+			g.write8(0xf7)
+			g.write8(0xf2)
+		}
 		else {
-			panic('unhandled div ${a}')
+			panic('unhandled div ${b}')
 		}
 	}
-	g.println('div ${a}')
+	g.println('div ${b}')
 }
 
 fn (mut g Gen) mod_reg(a Register, b Register) {
@@ -1616,6 +1603,51 @@ fn (mut g Gen) mov_reg(a Register, b Register) {
 	g.println('mov ${a}, ${b}')
 }
 
+fn (mut g Gen) add_store(a Register, b Register, size Size) {
+	if size == ._16 {
+		g.write8(0x66)
+	}
+	if size == ._64 {
+		g.write8(0x48 + int(b) / 8 * 4 + int(a) / 8)
+	}
+	g.write8(if size == ._8 { 0x00 } else { 0x01 })
+	g.write8(int(b) % 8 * 8 + int(a) % 8)
+	g.println('add [${a}], ${b}')
+}
+
+fn (mut g Gen) sub_store(a Register, b Register, size Size) {
+	if size == ._16 {
+		g.write8(0x66)
+	}
+	if size == ._64 {
+		g.write8(0x48 + int(b) / 8 * 4 + int(a) / 8)
+	}
+	g.write8(if size == ._8 { 0x28 } else { 0x29 })
+	g.write8(int(b) % 8 * 8 + int(a) % 8)
+	g.println('sub [${a}], ${b}')
+}
+
+[params]
+struct AvailableRegister {
+	available Register
+}
+
+fn (mut g Gen) mul_store(a Register, b Register, size Size) {
+	if size == ._8 {
+	} else {
+		if size == ._16 {
+			g.write8(0x66)
+		}
+		if size == ._64 {
+			g.write8(0x48 + int(b) / 8 * 4 + int(a) / 8)
+		}
+		g.write16(0xaf0f)
+		g.write8(int(b) % 8 * 8 + int(a) % 8)
+		g.println('imul ${b}, [${a}]')
+		g.mov_store(a, b, size)
+	}
+}
+
 fn (mut g Gen) sar8(r Register, val u8) {
 	g.write8(0x48)
 	g.write8(0xc1)
@@ -1655,8 +1687,8 @@ pub fn (mut g Gen) call_fn_amd64(node ast.CallExpr) {
 	return_size := g.get_type_size(node.return_type)
 	mut return_pos := -1
 	mut is_struct_return := false
-	if ts.kind == .struct_ {
-		return_pos = g.allocate_struct('', node.return_type)
+	if ts.kind in [.struct_, .multi_return] {
+		return_pos = g.allocate_by_type('', node.return_type)
 		if return_size > 16 {
 			is_struct_return = true
 			args << ast.CallArg{
@@ -1794,7 +1826,7 @@ pub fn (mut g Gen) call_fn_amd64(node ast.CallExpr) {
 	}
 	g.println('call `${n}()`')
 
-	if ts.kind == .struct_ {
+	if ts.kind in [.struct_, .multi_return] {
 		match return_size {
 			1...7 {
 				g.mov_var_to_reg(.rdx, LocalVar{ offset: return_pos, typ: ast.i64_type_idx })
@@ -1895,7 +1927,6 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 	match right {
 		ast.IntegerLiteral {
 			// g.allocate_var(name, 4, right.val.int())
-			// TODO float
 			match node.op {
 				.plus_assign {
 					g.mov_var_to_reg(.rax, ident)
@@ -1946,7 +1977,6 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 		}
 		ast.Ident {
 			// eprintln('identr') dump(node) dump(right)
-			// TODO float
 			match node.op {
 				.plus_assign {
 					g.mov_var_to_reg(.rax, ident)
@@ -1975,7 +2005,7 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 						ts := g.table.sym(typ)
 						match ts.info {
 							ast.Struct {
-								g.allocate_struct(name, typ)
+								g.allocate_by_type(name, typ)
 							}
 							else {}
 						}
@@ -2153,7 +2183,7 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 		ast.StructInit {
 			match node.op {
 				.decl_assign {
-					g.allocate_struct(name, right.typ)
+					g.allocate_by_type(name, right.typ)
 					g.init_struct(ident, right)
 				}
 				else {
@@ -2174,7 +2204,7 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 					}
 					ast.StringLiteral {
 						// TODO: use learel
-						str := g.eval_escape_codes(e)
+						str := g.eval_str_lit_escape_codes(e)
 						g.mov64(.rsi, g.allocate_string(str, 2, .abs64)) // for rsi its 2
 						g.mov_reg_to_var(LocalVar{pos, ast.u64_type_idx, ''}, .rsi)
 						pos += 8
@@ -2214,7 +2244,7 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 		ast.StringLiteral {
 			dest := g.allocate_var(name, 8, 0)
 			ie := right as ast.StringLiteral
-			str := g.eval_escape_codes(ie)
+			str := g.eval_str_lit_escape_codes(ie)
 			g.learel(.rsi, g.allocate_string(str, 3, .rel32))
 			g.mov_reg_to_var(LocalVar{dest, ast.u64_type_idx, name}, .rsi)
 		}
@@ -2278,91 +2308,345 @@ fn (mut g Gen) assign_right_expr(node ast.AssignStmt, i int, right ast.Expr, nam
 	}
 }
 
+[params]
+struct RegisterOption {
+	reg    Register    = Register.rax
+	ssereg SSERegister = SSERegister.xmm0
+}
+
+fn (mut g Gen) gen_type_promotion(from ast.Type, to ast.Type, option RegisterOption) {
+	if !to.is_pure_float() {
+		return
+	}
+	if g.is_register_type(from) {
+		// integer -> float
+		if g.get_type_size(from) == 8 && !from.is_signed() {
+			label1 := g.labels.new_label()
+			label2 := g.labels.new_label()
+			g.test_reg(option.reg)
+			addr1 := g.cjmp(.js)
+			g.labels.patches << LabelPatch{
+				id: label1
+				pos: addr1
+			}
+			// if castee is in the range of i64
+			prefix, inst := if g.get_type_size(to) == 4 {
+				0xf3, 's'
+			} else {
+				0xf2, 'd'
+			}
+			g.write8(prefix)
+			g.write8(0x48 + int(option.ssereg) / 8 * 4 + int(option.reg) / 8)
+			g.write16(0x2a0f)
+			g.write8(0xc0 + int(option.ssereg) % 8 * 8 + int(option.reg) % 8)
+			g.println('cvtsi2s${inst} ${option.ssereg}, ${option.reg}')
+			addr2 := g.jmp(0)
+			g.labels.patches << LabelPatch{
+				id: label2
+				pos: addr2
+			}
+			g.labels.addrs[label1] = g.pos()
+			// if castee has the leftmost bit
+			g.mov_reg(.rbx, .rax)
+			g.write([u8(0x48), 0xd1, 0xe8])
+			g.println('shr rax')
+			g.write([u8(0x83), 0xe3, 0x01])
+			g.println('and ebx, 0x1')
+			g.bitor_reg(.rax, .rbx)
+			g.write8(prefix)
+			g.write8(0x48 + int(option.ssereg) / 8 * 4 + int(option.reg) / 8)
+			g.write16(0x2a0f)
+			g.write8(0xc0 + int(option.ssereg) % 8 * 8 + int(option.reg) % 8)
+			g.println('cvtsi2s${inst} ${option.ssereg}, ${option.reg}')
+			g.add_sse(option.ssereg, option.ssereg, to)
+			g.labels.addrs[label2] = g.pos()
+		} else {
+			prefix, inst := if g.get_type_size(to) == 4 {
+				0xf3, 's'
+			} else {
+				0xf2, 'd'
+			}
+			g.write8(prefix)
+			g.write8(0x48 + int(option.ssereg) / 8 * 4 + int(option.reg) / 8)
+			g.write16(0x2a0f)
+			g.write8(0xc0 + int(option.ssereg) % 8 * 8 + int(option.reg) % 8)
+			g.println('cvtsi2s${inst} ${option.ssereg}, ${option.reg}')
+		}
+	} else {
+		if from == ast.f32_type_idx && to != ast.f32_type_idx {
+			// f32 -> f64
+			g.write8(0xf3)
+			if int(option.ssereg) >= int(SSERegister.xmm8) {
+				g.write8(0x45)
+			}
+			g.write16(0x5a0f)
+			g.write8(0xc0 + int(option.ssereg) % 8 * 9)
+			g.println('cvtss2sd ${option.ssereg}, ${option.ssereg}')
+		}
+	}
+}
+
+fn (mut g Gen) multi_assign_stmt(node ast.AssignStmt) {
+	multi_return := g.get_multi_return(node.right_types)
+	if node.has_cross_var {
+		// `a, b = b, a`
+		// construct a struct variable contains the return value
+		size := multi_return.size
+		align := multi_return.align
+		padding := (align - g.stack_var_pos % align) % align
+		g.stack_var_pos += size + padding
+		var := LocalVar{
+			offset: g.stack_var_pos
+		}
+		// zero fill
+		mut left := if size >= 16 {
+			g.mov(.rax, 0)
+			g.mov(.rcx, size / 8)
+			g.lea_var_to_reg(.rdi, var.offset)
+			g.write([u8(0xf3), 0x48, 0xab])
+			g.println('rep stosq')
+			size % 8
+		} else {
+			size
+		}
+		if left >= 8 {
+			g.mov_int_to_var(var, 0, offset: size - left, typ: ast.i64_type_idx)
+			left -= 8
+		}
+		if left >= 4 {
+			g.mov_int_to_var(var, 0, offset: size - left, typ: ast.int_type_idx)
+			left -= 4
+		}
+		if left >= 2 {
+			g.mov_int_to_var(var, 0, offset: size - left, typ: ast.i16_type_idx)
+			left -= 2
+		}
+		if left == 1 {
+			g.mov_int_to_var(var, 0, offset: size - left, typ: ast.i8_type_idx)
+		}
+		// store exprs to the variable
+		for i, expr in node.right {
+			offset := multi_return.offsets[i]
+			g.expr(expr)
+			// TODO expr not on rax
+			g.mov_reg_to_var(var, .rax, offset: offset, typ: node.right_types[i])
+		}
+		// store the multi return struct value
+		g.lea_var_to_reg(.rax, var.offset)
+	} else {
+		g.expr(node.right[0])
+	}
+	g.mov_reg(.rdx, .rax)
+
+	mut current_offset := 0
+	for i, offset in multi_return.offsets {
+		if node.left[i] is ast.Ident {
+			name := (node.left[i] as ast.Ident).name
+			if name == '_' {
+				continue
+			}
+			if node.op == .decl_assign {
+				g.allocate_by_type(name, node.left_types[i])
+			}
+		}
+		if offset != current_offset {
+			g.add(.rdx, offset - current_offset)
+			current_offset = offset
+		}
+		g.gen_left_value(node.left[i])
+		left_type := node.left_types[i]
+		right_type := node.right_types[i]
+		if g.is_register_type(right_type) {
+			g.mov_deref(.rcx, .rdx, right_type)
+		} else if node.right_types[i].is_pure_float() {
+			g.mov_deref_sse(.xmm0, .rdx, right_type)
+		}
+		g.gen_type_promotion(right_type, left_type, reg: .rcx)
+		if g.is_register_type(left_type) {
+			match node.op {
+				.assign, .decl_assign {
+					g.mov_store(.rax, .rcx, match g.get_type_size(left_type) {
+						1 { ._8 }
+						2 { ._16 }
+						4 { ._32 }
+						else { ._64 }
+					})
+				}
+				else {
+					g.n_error('Unsupported assign instruction')
+				}
+			}
+		} else if left_type.is_pure_float() {
+			is_f32 := left_type == ast.f32_type_idx
+			if node.op !in [.assign, .decl_assign] {
+				g.mov_ssereg(.xmm1, .xmm0)
+				if is_f32 {
+					g.write32(0x00100ff3)
+					g.println('movss xmm0, [rax]')
+				} else {
+					g.write32(0x00100ff2)
+					g.println('movsd xmm0, [rax]')
+				}
+			}
+			match node.op {
+				.plus_assign {
+					g.add_sse(.xmm0, .xmm1, left_type)
+				}
+				.minus_assign {
+					g.sub_sse(.xmm0, .xmm1, left_type)
+				}
+				.mult_assign {
+					g.mul_sse(.xmm0, .xmm1, left_type)
+				}
+				.div_assign {
+					g.div_sse(.xmm0, .xmm1, left_type)
+				}
+				else {}
+			}
+			if is_f32 {
+				g.write32(0x00110ff3)
+				g.println('movss [rax], xmm0')
+			} else {
+				g.write32(0x00110ff2)
+				g.println('movsd [rax], xmm0')
+			}
+		} else {
+			g.n_error('multi return for struct is not supported yet')
+		}
+	}
+}
+
 fn (mut g Gen) assign_stmt(node ast.AssignStmt) {
+	// `a, b := foo()`
+	// `a, b := if cond { 1, 2 } else { 3, 4 }`
+	// `a, b = b, a`
+	if (node.left.len > 1 && node.right.len == 1) || node.has_cross_var {
+		g.multi_assign_stmt(node)
+		return
+	}
 	// `a := 1` | `a,b := 1,2`
 	for i, left in node.left {
 		right := node.right[i]
-		if left !is ast.Ident {
-			// TODO float
-			g.gen_left_value(left)
-			g.push(.rax)
-			g.expr(right)
-			g.pop(.rdx)
-			typ := node.left_types[i]
-			if typ.is_number() || typ.is_real_pointer() || typ.is_bool() {
-				match node.op {
-					.assign {
-						g.mov_store(.rdx, .rax, match g.get_type_size(typ) {
-							1 { ._8 }
-							2 { ._16 }
-							3 { ._32 }
-							else { ._64 }
-						})
-					}
-					else {
-						g.n_error('Unsupported assign instruction')
-					}
-				}
-			} else {
-				if node.op != .assign {
-					g.n_error('Unsupported assign instruction')
-				}
-				ts := g.table.sym(typ)
-				match ts.kind {
-					.struct_ {
-						size := g.get_type_size(typ)
-						if size >= 8 {
-							for j in 0 .. size / 8 {
-								g.mov_deref(.rcx, .rdx, ast.u64_type_idx)
-								g.mov_store(.rax, .rcx, ._64)
-								offset := if j == size / 8 - 1 && size % 8 != 0 {
-									size % 8
-								} else {
-									8
-								}
-								g.add(.rax, offset)
-								g.add(.rdx, offset)
-							}
-							if size % 8 != 0 {
-								g.mov_deref(.rcx, .rdx, ast.u64_type_idx)
-								g.mov_store(.rax, .rcx, ._64)
-							}
-						} else {
-							mut left_size := if size >= 4 {
-								g.mov_deref(.rcx, .rdx, ast.u32_type_idx)
-								g.mov_store(.rax, .rcx, ._32)
-								if size > 4 {
-									g.add(.rax, 4)
-									g.add(.rdx, 4)
-								}
-								size - 4
-							} else {
-								size
-							}
-							if left_size >= 2 {
-								g.mov_deref(.rcx, .rdx, ast.u16_type_idx)
-								g.mov_store(.rax, .rcx, ._16)
-								if left_size > 2 {
-									g.add(.rax, 2)
-									g.add(.rdx, 2)
-								}
-								left_size -= 2
-							}
-							if left_size == 1 {
-								g.mov_deref(.rcx, .rdx, ast.u8_type_idx)
-								g.mov_store(.rax, .rcx, ._8)
-							}
-						}
-					}
-					.enum_ {
-						g.mov_store(.rdx, .rax, ._32)
-					}
-					else {}
-				}
-			}
+		typ := node.left_types[i]
+		// this branch would be removed, but left for compatibility
+		if left is ast.Ident && !typ.is_pure_float() {
+			ident := left as ast.Ident
+			g.assign_right_expr(node, i, right, ident.name, ident)
 			continue
 		}
-		g.assign_right_expr(node, i, right, left.str(), left as ast.Ident)
+		if left is ast.Ident && node.op == .decl_assign {
+			g.allocate_by_type((left as ast.Ident).name, typ)
+		}
+		g.gen_left_value(left)
+		g.push(.rax)
+		g.expr(right)
+		g.pop(.rdx)
+		g.gen_type_promotion(node.right_types[0], typ)
+		if g.is_register_type(typ) {
+			match node.op {
+				.decl_assign, .assign {
+					g.mov_store(.rdx, .rax, match g.get_type_size(typ) {
+						1 { ._8 }
+						2 { ._16 }
+						4 { ._32 }
+						else { ._64 }
+					})
+				}
+				else {
+					g.n_error('Unsupported assign instruction')
+				}
+			}
+		} else if typ.is_pure_float() {
+			is_f32 := typ == ast.f32_type_idx
+			if node.op !in [.assign, .decl_assign] {
+				g.mov_ssereg(.xmm1, .xmm0)
+				if is_f32 {
+					g.write32(0x02100ff3)
+					g.println('movss xmm0, [rdx]')
+				} else {
+					g.write32(0x02100ff2)
+					g.println('movsd xmm0, [rdx]')
+				}
+			}
+			match node.op {
+				.plus_assign {
+					g.add_sse(.xmm0, .xmm1, typ)
+				}
+				.minus_assign {
+					g.sub_sse(.xmm0, .xmm1, typ)
+				}
+				.mult_assign {
+					g.mul_sse(.xmm0, .xmm1, typ)
+				}
+				.div_assign {
+					g.div_sse(.xmm0, .xmm1, typ)
+				}
+				else {}
+			}
+			if is_f32 {
+				g.write32(0x02110ff3)
+				g.println('movss [rdx], xmm0')
+			} else {
+				g.write32(0x02110ff2)
+				g.println('movsd [rdx], xmm0')
+			}
+		} else {
+			if node.op !in [.assign, .decl_assign] {
+				g.n_error('Unsupported assign instruction')
+			}
+			ts := g.table.sym(typ)
+			match ts.kind {
+				.struct_ {
+					size := g.get_type_size(typ)
+					if size >= 8 {
+						for j in 0 .. size / 8 {
+							g.mov_deref(.rcx, .rdx, ast.u64_type_idx)
+							g.mov_store(.rax, .rcx, ._64)
+							offset := if j == size / 8 - 1 && size % 8 != 0 {
+								size % 8
+							} else {
+								8
+							}
+							g.add(.rax, offset)
+							g.add(.rdx, offset)
+						}
+						if size % 8 != 0 {
+							g.mov_deref(.rcx, .rdx, ast.u64_type_idx)
+							g.mov_store(.rax, .rcx, ._64)
+						}
+					} else {
+						mut left_size := if size >= 4 {
+							g.mov_deref(.rcx, .rdx, ast.u32_type_idx)
+							g.mov_store(.rax, .rcx, ._32)
+							if size > 4 {
+								g.add(.rax, 4)
+								g.add(.rdx, 4)
+							}
+							size - 4
+						} else {
+							size
+						}
+						if left_size >= 2 {
+							g.mov_deref(.rcx, .rdx, ast.u16_type_idx)
+							g.mov_store(.rax, .rcx, ._16)
+							if left_size > 2 {
+								g.add(.rax, 2)
+								g.add(.rdx, 2)
+							}
+							left_size -= 2
+						}
+						if left_size == 1 {
+							g.mov_deref(.rcx, .rdx, ast.u8_type_idx)
+							g.mov_store(.rax, .rcx, ._8)
+						}
+					}
+				}
+				.enum_ {
+					g.mov_store(.rdx, .rax, ._32)
+				}
+				else {}
+			}
+		}
 	}
 }
 
@@ -2421,9 +2705,19 @@ fn (mut g Gen) gen_left_value(node ast.Expr) {
 fn (mut g Gen) prefix_expr(node ast.PrefixExpr) {
 	match node.op {
 		.minus {
-			// TODO neg float
 			g.expr(node.right)
-			g.neg(.rax)
+			if node.right_type.is_pure_float() {
+				g.mov_ssereg_to_reg(.rax, .xmm0, node.right_type)
+				if node.right_type == ast.f32_type_idx {
+					g.mov32(.rdx, int(u32(0x80000000)))
+				} else {
+					g.movabs(.rdx, i64(u64(0x8000000000000000)))
+				}
+				g.bitxor_reg(.rax, .rdx)
+				g.mov_reg_to_ssereg(.xmm0, .rax, node.right_type)
+			} else {
+				g.neg(.rax)
+			}
 		}
 		.amp {
 			g.gen_left_value(node.right)
@@ -2482,8 +2776,7 @@ fn (mut g Gen) infix_expr(node ast.InfixExpr) {
 					g.write8(if node.op == .eq { 0x00 } else { 0x04 })
 					inst := if node.op == .eq { 'cmpeqss' } else { 'cmpneqss' }
 					g.println('${inst} xmm0, xmm1')
-					g.write32(0xc07e0f66)
-					g.println('movd eax, xmm0')
+					g.mov_ssereg_to_reg(.rax, .xmm0, ast.f32_type_idx)
 					g.write([u8(0x83), 0xe0, 0x01])
 					g.println('and eax, 0x1')
 				}
@@ -2535,7 +2828,8 @@ fn (mut g Gen) infix_expr(node ast.InfixExpr) {
 			}
 		}
 		if node.left_type !in ast.integer_type_idxs && node.left_type != ast.bool_type_idx
-			&& g.table.sym(node.left_type).info !is ast.Enum {
+			&& g.table.sym(node.left_type).info !is ast.Enum && !node.left_type.is_ptr()
+			&& !node.left_type.is_voidptr() {
 			g.n_error('unsupported type for `${node.op}`: ${node.left_type}')
 		}
 		// left: rax, right: rdx
@@ -2907,6 +3201,18 @@ fn (mut g Gen) for_stmt(node ast.ForStmt) {
 				.gt {
 					jump_addr = g.cjmp(.jle)
 				}
+				.le {
+					jump_addr = g.cjmp(.jg)
+				}
+				.ge {
+					jump_addr = g.cjmp(.jl)
+				}
+				.ne {
+					jump_addr = g.cjmp(.je)
+				}
+				.eq {
+					jump_addr = g.cjmp(.jne)
+				}
 				else {
 					g.n_error('unhandled infix cond token')
 				}
@@ -2953,7 +3259,7 @@ fn (mut g Gen) fn_decl_amd64(node ast.FnDecl) {
 	// The first parameter is an address of returned struct if size > 16
 	ts := g.table.sym(node.return_type)
 	return_size := g.get_type_size(node.return_type)
-	if ts.kind == .struct_ {
+	if ts.kind in [.struct_, .multi_return] {
 		if return_size > 16 {
 			params << ast.Param{
 				name: '_return_val_addr'
@@ -2994,7 +3300,7 @@ fn (mut g Gen) fn_decl_amd64(node ast.FnDecl) {
 	for i in reg_args {
 		name := params[i].name
 		g.stack_var_pos += (8 - args_size[i] % 8) % 8
-		offset := g.allocate_struct(name, params[i].typ)
+		offset := g.allocate_by_type(name, params[i].typ)
 		// copy
 		g.mov_reg_to_var(LocalVar{ offset: offset, typ: ast.i64_type_idx, name: name },
 			native.fn_arg_registers[reg_idx])
@@ -3010,7 +3316,7 @@ fn (mut g Gen) fn_decl_amd64(node ast.FnDecl) {
 	// define and copy args on sse register
 	for idx, i in ssereg_args {
 		name := params[i].name
-		offset := g.allocate_struct(name, params[i].typ)
+		offset := g.allocate_by_type(name, params[i].typ)
 		// copy
 		g.mov_ssereg_to_var(LocalVar{ offset: offset, typ: params[i].typ }, native.fn_arg_sse_registers[idx])
 	}
@@ -3077,11 +3383,22 @@ pub fn (mut g Gen) allocate_array(name string, size int, items int) int {
 	return pos
 }
 
+pub fn (mut g Gen) allocate_var_two_step(name string, size int, initial_val int) int {
+	// TODO: replace int by i64 or bigger
+	g.allocate_var(name, size - 8, 0)
+	return g.allocate_var(name, 8, initial_val)
+}
+
 pub fn (mut g Gen) allocate_var(name string, size int, initial_val int) int {
 	if g.pref.arch == .arm64 {
 		// TODO
 		return 0
 	}
+
+	if size > 8 {
+		return g.allocate_var_two_step(name, size, initial_val)
+	}
+
 	padding := (size - g.stack_var_pos % size) % size
 	n := g.stack_var_pos + size + padding
 	is_far_var := n > 0x80 || n < -0x7f
@@ -3091,6 +3408,12 @@ pub fn (mut g Gen) allocate_var(name string, size int, initial_val int) int {
 		1 {
 			// BYTE
 			g.write8(0xc6)
+			g.write8(0x45 + far_var_offset)
+		}
+		2 {
+			// WORD
+			g.write8(0x66)
+			g.write8(0xc7)
 			g.write8(0x45 + far_var_offset)
 		}
 		4 {
@@ -3123,6 +3446,9 @@ pub fn (mut g Gen) allocate_var(name string, size int, initial_val int) int {
 		1 {
 			g.write8(initial_val)
 		}
+		2 {
+			g.write16(initial_val)
+		}
 		4 {
 			g.write32(initial_val)
 		}
@@ -3139,7 +3465,7 @@ pub fn (mut g Gen) allocate_var(name string, size int, initial_val int) int {
 	return g.stack_var_pos
 }
 
-fn (mut g Gen) allocate_struct(name string, typ ast.Type) int {
+fn (mut g Gen) allocate_by_type(name string, typ ast.Type) int {
 	if g.pref.arch == .arm64 {
 		// TODO
 		return 0
@@ -3421,7 +3747,7 @@ fn (mut g Gen) reverse_string(reg Register) {
 }
 
 fn (mut g Gen) gen_match_expr_amd64(expr ast.MatchExpr) {
-	branch_labels := []int{len: expr.branches.len, init: g.labels.new_label() + it * 0} // call new_label for all elements in the array
+	branch_labels := []int{len: expr.branches.len, init: g.labels.new_label() + index * 0} // call new_label for all elements in the array
 	end_label := g.labels.new_label()
 
 	if expr.is_sum_type {
@@ -3581,6 +3907,51 @@ fn (mut g Gen) mov_ssereg(a SSERegister, b SSERegister) {
 	g.write16(0x100f)
 	g.write8(0xc0 + int(a) % 8 * 8 + int(b) % 8)
 	g.println('movsd ${a}, ${b}')
+}
+
+fn (mut g Gen) mov_ssereg_to_reg(a Register, b SSERegister, typ ast.Type) {
+	g.write8(0x66)
+	rex_base, inst := if typ == ast.f32_type_idx {
+		0x40, 'movd'
+	} else {
+		0x48, 'movq'
+	}
+	if rex_base == 0x48 || int(a) >= int(Register.r8) || int(b) >= int(SSERegister.xmm8) {
+		g.write8(rex_base + int(a) / 8 * 4 + int(b) / 8)
+	}
+	g.write16(0x7e0f)
+	g.write8(0xc0 + int(a) % 8 * 8 + int(b) % 8)
+	g.println('${inst} ${a}, ${b}')
+}
+
+fn (mut g Gen) mov_reg_to_ssereg(a SSERegister, b Register, typ ast.Type) {
+	g.write8(0x66)
+	rex_base, inst := if typ == ast.f32_type_idx {
+		0x40, 'movd'
+	} else {
+		0x48, 'movq'
+	}
+	if rex_base == 0x48 || int(a) >= int(SSERegister.xmm8) || int(b) >= int(Register.r8) {
+		g.write8(rex_base + int(a) / 8 * 4 + int(b) / 8)
+	}
+	g.write16(0x6e0f)
+	g.write8(0xc0 + int(a) % 8 * 8 + int(b) % 8)
+	g.println('${inst} ${a}, ${b}')
+}
+
+fn (mut g Gen) mov_deref_sse(a SSERegister, b Register, typ ast.Type) {
+	op, inst, len := if typ == ast.f32_type_idx {
+		0xf3, 'movss', 'DWORD'
+	} else {
+		0xf2, 'movsd', 'QWORD'
+	}
+	g.write8(op)
+	if int(a) >= int(SSERegister.xmm8) || int(b) >= int(Register.r8) {
+		g.write8(0x40 + int(a) / 8 * 4 + int(b) / 8)
+	}
+	g.write16(0x100f)
+	g.write8(int(a) % 8 * 8 + int(b) % 8)
+	g.println('${inst} ${a}, ${len} PTR [${b}]')
 }
 
 fn (mut g Gen) add_sse(a SSERegister, b SSERegister, typ ast.Type) {
@@ -3776,12 +4147,12 @@ fn (mut g Gen) gen_cast_expr_amd64(expr ast.CastExpr) {
 				}
 				match g.get_type_size(expr.expr_type) {
 					4 {
-						g.write([u8(0xf3), 0x48, 0x0f, 0x2d, 0xc0])
-						g.println('cvtss2si rax, xmm0')
+						g.write([u8(0xf3), 0x48, 0x0f, 0x2c, 0xc0])
+						g.println('cvttss2si rax, xmm0')
 					}
 					8 {
-						g.write([u8(0xf2), 0x48, 0x0f, 0x2d, 0xc0])
-						g.println('cvtsd2si rax, xmm0')
+						g.write([u8(0xf2), 0x48, 0x0f, 0x2c, 0xc0])
+						g.println('cvttsd2si rax, xmm0')
 					}
 					else {}
 				}
@@ -3794,12 +4165,12 @@ fn (mut g Gen) gen_cast_expr_amd64(expr ast.CastExpr) {
 				g.sub_sse(.xmm0, .xmm1, expr.expr_type)
 				match g.get_type_size(expr.expr_type) {
 					4 {
-						g.write([u8(0xf3), 0x48, 0x0f, 0x2d, 0xc0])
-						g.println('cvtss2si rax, xmm0')
+						g.write([u8(0xf3), 0x48, 0x0f, 0x2c, 0xc0])
+						g.println('cvttss2si rax, xmm0')
 					}
 					8 {
-						g.write([u8(0xf2), 0x48, 0x0f, 0x2d, 0xc0])
-						g.println('cvtsd2si rax, xmm0')
+						g.write([u8(0xf2), 0x48, 0x0f, 0x2c, 0xc0])
+						g.println('cvttsd2si rax, xmm0')
 					}
 					else {}
 				}
@@ -3808,12 +4179,12 @@ fn (mut g Gen) gen_cast_expr_amd64(expr ast.CastExpr) {
 			} else {
 				match g.get_type_size(expr.expr_type) {
 					4 {
-						g.write([u8(0xf3), 0x48, 0x0f, 0x2d, 0xc0])
-						g.println('cvtss2si rax, xmm0')
+						g.write([u8(0xf3), 0x48, 0x0f, 0x2c, 0xc0])
+						g.println('cvttss2si rax, xmm0')
 					}
 					8 {
-						g.write([u8(0xf2), 0x48, 0x0f, 0x2d, 0xc0])
-						g.println('cvtsd2si rax, xmm0')
+						g.write([u8(0xf2), 0x48, 0x0f, 0x2c, 0xc0])
+						g.println('cvttsd2si rax, xmm0')
 					}
 					else {}
 				}

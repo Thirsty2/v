@@ -169,6 +169,7 @@ fn test_write_and_read_string_to_file() {
 
 // test_write_and_read_bytes checks for regressions made in the functions
 // read_bytes, read_bytes_at and write_bytes.
+
 fn test_write_and_read_bytes() {
 	file_name := './byte_reader_writer.tst'
 	payload := [u8(`I`), `D`, `D`, `Q`, `D`]
@@ -457,6 +458,7 @@ fn test_realpath_absolutizes_existing_relative_paths() {
 }
 
 // TODO: think much more about whether this is desirable:
+
 fn test_realpath_does_not_absolutize_non_existing_relative_paths() {
 	relative_path := os.join_path('one', 'nonexisting_folder', '..', 'something')
 	$if !windows {
@@ -554,6 +556,7 @@ fn test_make_hardlink_check_is_link_and_remove_hardlink_with_file() {
 // println(cpid)
 // }
 // }
+
 fn test_symlink() {
 	os.mkdir('symlink') or { panic(err) }
 	os.symlink('symlink', 'symlink2') or { panic(err) }
@@ -599,6 +602,10 @@ fn test_file_ext() {
 	assert os.file_ext('file...') == ''
 	assert os.file_ext('.file.') == ''
 	assert os.file_ext('..file..') == ''
+	assert os.file_ext('./.git') == ''
+	assert os.file_ext('./.git/') == ''
+	assert os.file_ext('\\.git') == ''
+	assert os.file_ext('\\.git\\') == ''
 }
 
 fn test_join() {
@@ -678,7 +685,7 @@ fn test_uname() {
 	assert u.machine.len > 0
 }
 
-// tests for write_file_array and read_file_array<T>:
+// tests for write_file_array and read_file_array[T]:
 const maxn = 3
 
 struct IntPoint {
@@ -706,7 +713,7 @@ fn test_write_file_array_structs() {
 		arr[i] = IntPoint{65 + i, 65 + i + 10}
 	}
 	os.write_file_array(fpath, arr) or { panic(err) }
-	rarr := os.read_file_array<IntPoint>(fpath)
+	rarr := os.read_file_array[IntPoint](fpath)
 	assert rarr == arr
 	assert rarr.len == maxn
 	// eprintln( rarr.str().replace('\n', ' ').replace('},', '},\n'))
@@ -801,8 +808,14 @@ fn test_truncate() {
 }
 
 fn test_hostname() {
-	assert os.hostname().len > 2
+	hostname := os.hostname() or { '' }
+	assert hostname.len > 2
 }
+
+// fn test_loginname() {
+// loginname := os.loginname() or { '' }
+// assert loginname.len > 2
+//}
 
 fn test_glob() {
 	os.mkdir('test_dir') or { panic(err) }
@@ -925,4 +938,64 @@ fn test_reading_from_empty_file() {
 	content_bytes := os.read_bytes(empty_file)!
 	assert content_bytes.len == 0
 	os.rm(empty_file)!
+}
+
+fn move_across_partitions_using_function(f fn (src string, dst string) !) ! {
+	bindfs := os.find_abs_path_of_executable('bindfs') or {
+		eprintln('skipping test_mv_by_cp, because bindfs was not present')
+		return
+	}
+	// eprintln('>> $bindfs')
+	pfolder := os.join_path(tfolder, 'parent')
+	cfolder := os.join_path(pfolder, 'child')
+	mfolder := os.join_path(pfolder, 'mountpoint')
+	cdeepfolder := os.join_path(cfolder, 'deep', 'folder')
+	os.mkdir_all(mfolder)!
+	os.mkdir_all(cfolder)!
+	os.mkdir_all(cdeepfolder)!
+	//
+	original_path := os.join_path(pfolder, 'original.txt')
+	target_path := os.join_path(cdeepfolder, 'target.txt')
+	os.write_file(original_path, 'text')!
+	os.write_file(os.join_path(cdeepfolder, 'x.txt'), 'some text')!
+	// os.system('tree $pfolder')
+	/*
+	/tmp/v_1000/v/tests/os_test/parent
+	├── child
+	│   └── deep
+	│       └── folder
+	│           └── x.txt
+	├── mountpoint
+	└── original.txt
+	*/
+	os.system('${bindfs} --no-allow-other ${cfolder} ${mfolder}')
+	defer {
+		os.system('sync; umount ${mfolder}')
+	}
+	// os.system('tree $pfolder')
+	/*
+	/tmp/v_1000/v/tests/os_test/parent
+	├── child
+	│   └── deep
+	│       └── folder
+	│           └── x.txt
+	├── mountpoint
+	│   └── deep
+	│       └── folder
+	│           └── x.txt
+	└── original.txt
+	*/
+
+	f(original_path, target_path)!
+
+	assert os.exists(target_path)
+	assert !os.exists(original_path)
+}
+
+fn test_mv_by_cp_across_partitions() {
+	move_across_partitions_using_function(os.mv_by_cp)!
+}
+
+fn test_mv_across_partitions() {
+	move_across_partitions_using_function(os.mv)!
 }

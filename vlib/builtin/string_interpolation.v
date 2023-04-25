@@ -4,7 +4,7 @@ import strconv
 import strings
 
 /*=============================================================================
-Copyright (c) 2019-2022 Dario Deledda. All rights reserved.
+Copyright (c) 2019-2023 Dario Deledda. All rights reserved.
 Use of this source code is governed by an MIT license
 that can be found in the LICENSE file.
 
@@ -656,9 +656,8 @@ pub:
 
 // interpolation function
 [direct_array_access; manualfree]
-pub fn str_intp(data_len int, in_data voidptr) string {
+pub fn str_intp(data_len int, input_base &StrIntpData) string {
 	mut res := strings.new_builder(256)
-	input_base := &StrIntpData(in_data)
 	for i := 0; i < data_len; i++ {
 		data := unsafe { &input_base[i] }
 		// avoid empty strings

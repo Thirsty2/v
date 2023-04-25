@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 //
@@ -36,6 +36,7 @@ pub enum Language {
 	v
 	c
 	js
+	wasm
 	amd64 // aka x86_64
 	i386
 	arm64 // 64-bit arm
@@ -89,22 +90,24 @@ pub struct TypeSymbol {
 pub:
 	parent_idx int
 pub mut:
-	info     TypeInfo
-	kind     Kind
-	name     string // the internal & source name of the type, i.e. `[5]int`.
-	cname    string // the name with no dots for use in the generated C code
-	methods  []Fn
-	mod      string
-	is_pub   bool
-	language Language
-	idx      int
-	size     int = -1
-	align    int = -1
+	info          TypeInfo
+	kind          Kind
+	name          string // the internal & source name of the type, i.e. `[5]int`.
+	cname         string // the name with no dots for use in the generated C code
+	rname         string // the raw name
+	methods       []Fn
+	generic_types []Type
+	mod           string
+	is_pub        bool
+	language      Language
+	idx           int
+	size          int = -1
+	align         int = -1
 }
 
 // max of 8
 pub enum TypeFlag {
-	optional
+	option
 	result
 	variadic
 	generic
@@ -128,6 +131,131 @@ pub fn (t ShareType) str() string {
 		.shared_t { return 'shared' }
 		.atomic_t { return 'atomic' }
 	}
+}
+
+pub struct MultiReturn {
+pub mut:
+	types []Type
+}
+
+pub struct FnType {
+pub mut:
+	is_anon  bool
+	has_decl bool
+	func     Fn
+}
+
+[minify]
+pub struct Struct {
+pub:
+	attrs []Attr
+pub mut:
+	embeds         []Type
+	fields         []StructField
+	is_typedef     bool // C. [typedef]
+	is_union       bool
+	is_heap        bool
+	is_minify      bool
+	is_anon        bool
+	is_generic     bool
+	generic_types  []Type
+	concrete_types []Type
+	parent_type    Type
+}
+
+// instantiation of a generic struct
+pub struct GenericInst {
+pub mut:
+	parent_idx     int    // idx of the base generic struct
+	concrete_types []Type // concrete types, e.g. [int, string]
+}
+
+[minify]
+pub struct Interface {
+pub mut:
+	types   []Type // all types that implement this interface
+	fields  []StructField
+	methods []Fn
+	embeds  []Type
+	// `I1 is I2` conversions
+	conversions map[int][]Type
+	// generic interface support
+	is_generic     bool
+	generic_types  []Type
+	concrete_types []Type
+	parent_type    Type
+}
+
+pub struct Enum {
+pub:
+	vals             []string
+	is_flag          bool
+	is_multi_allowed bool
+	uses_exprs       bool
+	typ              Type
+}
+
+[minify]
+pub struct Alias {
+pub:
+	parent_type Type
+	language    Language
+	is_import   bool
+}
+
+pub struct Aggregate {
+mut:
+	fields []StructField // used for faster lookup inside the module
+pub:
+	sum_type Type
+	types    []Type
+}
+
+pub struct Array {
+pub:
+	nr_dims int
+pub mut:
+	elem_type Type
+}
+
+[minify]
+pub struct ArrayFixed {
+pub:
+	size      int
+	size_expr Expr // used by fmt for e.g. ´[my_const]u8´
+pub mut:
+	elem_type Type
+}
+
+pub struct Chan {
+pub mut:
+	elem_type Type
+	is_mut    bool
+}
+
+pub struct Thread {
+pub mut:
+	return_type Type
+}
+
+pub struct Map {
+pub mut:
+	key_type   Type
+	value_type Type
+}
+
+[minify]
+pub struct SumType {
+pub mut:
+	fields       []StructField
+	found_fields bool
+	is_anon      bool
+	// generic sumtype support
+	is_generic     bool
+	variants       []Type
+	generic_types  []Type
+	concrete_types []Type
+	parent_type    Type
 }
 
 // <atomic.h> defines special typenames
@@ -226,10 +354,18 @@ pub fn (t Type) clear_flag(flag TypeFlag) Type {
 	return int(t) & ~(1 << (int(flag) + 24))
 }
 
-// clear all flags
+// clear all flags or multi flags
 [inline]
-pub fn (t Type) clear_flags() Type {
-	return int(t) & 0xffffff
+pub fn (t Type) clear_flags(flags ...TypeFlag) Type {
+	if flags.len == 0 {
+		return int(t) & 0xffffff
+	} else {
+		mut typ := int(t)
+		for flag in flags {
+			typ = typ & ~(1 << (int(flag) + 24))
+		}
+		return typ
+	}
 }
 
 // return true if `flag` is set on `t`
@@ -279,8 +415,8 @@ pub fn (t Type) debug() []string {
 	res << 'idx: 0x${t.idx().hex():-8}'
 	res << 'type: 0x${t.hex():-8}'
 	res << 'nr_muls: ${t.nr_muls()}'
-	if t.has_flag(.optional) {
-		res << 'optional'
+	if t.has_flag(.option) {
+		res << 'option'
 	}
 	if t.has_flag(.result) {
 		res << 'result'
@@ -485,7 +621,7 @@ pub const (
 
 pub const (
 	void_type          = new_type(void_type_idx)
-	ovoid_type         = new_type(void_type_idx).set_flag(.optional) // the return type of `fn ()?`
+	ovoid_type         = new_type(void_type_idx).set_flag(.option) // the return type of `fn ()?`
 	rvoid_type         = new_type(void_type_idx).set_flag(.result) // the return type of `fn () !`
 	voidptr_type       = new_type(voidptr_type_idx)
 	byteptr_type       = new_type(byteptr_type_idx)
@@ -554,21 +690,9 @@ pub fn mktyp(typ Type) Type {
 	}
 }
 
-pub struct MultiReturn {
-pub mut:
-	types []Type
-}
-
-pub struct FnType {
-pub mut:
-	is_anon  bool
-	has_decl bool
-	func     Fn
-}
-
 // returns TypeSymbol kind only if there are no type modifiers
 pub fn (t &Table) type_kind(typ Type) Kind {
-	if typ.nr_muls() > 0 || typ.has_flag(.optional) || typ.has_flag(.result) {
+	if typ.nr_muls() > 0 || typ.has_flag(.option) || typ.has_flag(.result) {
 		return Kind.placeholder
 	}
 	return t.sym(typ).kind
@@ -854,8 +978,13 @@ pub fn (t &TypeSymbol) is_number() bool {
 }
 
 [inline]
+pub fn (t &TypeSymbol) is_bool() bool {
+	return t.kind == .bool
+}
+
+[inline]
 pub fn (t &TypeSymbol) is_primitive() bool {
-	return t.is_number() || t.is_pointer() || t.is_string()
+	return t.is_number() || t.is_pointer() || t.is_string() || t.is_bool()
 }
 
 [inline]
@@ -865,7 +994,7 @@ pub fn (t &TypeSymbol) is_builtin() bool {
 
 // type_size returns the size and alignment (in bytes) of `typ`, similarly to  C's `sizeof()` and `alignof()`.
 pub fn (t &Table) type_size(typ Type) (int, int) {
-	if typ.has_flag(.optional) || typ.has_flag(.result) {
+	if typ.has_flag(.option) || typ.has_flag(.result) {
 		return t.type_size(ast.error_type_idx)
 	}
 	if typ.nr_muls() > 0 {
@@ -881,6 +1010,7 @@ pub fn (t &Table) type_size(typ Type) (int, int) {
 		.placeholder, .void, .none_, .generic_inst {}
 		.voidptr, .byteptr, .charptr, .function, .usize, .isize, .any, .thread, .chan {
 			size = t.pointer_size
+			align = t.pointer_size
 		}
 		.i8, .u8, .char, .bool {
 			size = 1
@@ -1022,118 +1152,6 @@ pub fn (kinds []Kind) str() string {
 	return kinds_str
 }
 
-[minify]
-pub struct Struct {
-pub:
-	attrs []Attr
-pub mut:
-	embeds         []Type
-	fields         []StructField
-	is_typedef     bool // C. [typedef]
-	is_union       bool
-	is_heap        bool
-	is_minify      bool
-	is_anon        bool
-	is_generic     bool
-	generic_types  []Type
-	concrete_types []Type
-	parent_type    Type
-}
-
-// instantiation of a generic struct
-pub struct GenericInst {
-pub mut:
-	parent_idx     int    // idx of the base generic struct
-	concrete_types []Type // concrete types, e.g. <int, string>
-}
-
-[minify]
-pub struct Interface {
-pub mut:
-	types   []Type // all types that implement this interface
-	fields  []StructField
-	methods []Fn
-	embeds  []Type
-	// `I1 is I2` conversions
-	conversions map[int][]Type
-	// generic interface support
-	is_generic     bool
-	generic_types  []Type
-	concrete_types []Type
-	parent_type    Type
-}
-
-pub struct Enum {
-pub:
-	vals             []string
-	is_flag          bool
-	is_multi_allowed bool
-	uses_exprs       bool
-}
-
-[minify]
-pub struct Alias {
-pub:
-	parent_type Type
-	language    Language
-	is_import   bool
-}
-
-pub struct Aggregate {
-mut:
-	fields []StructField // used for faster lookup inside the module
-pub:
-	sum_type Type
-	types    []Type
-}
-
-pub struct Array {
-pub:
-	nr_dims int
-pub mut:
-	elem_type Type
-}
-
-[minify]
-pub struct ArrayFixed {
-pub:
-	size      int
-	size_expr Expr // used by fmt for e.g. ´[my_const]u8´
-pub mut:
-	elem_type Type
-}
-
-pub struct Chan {
-pub mut:
-	elem_type Type
-	is_mut    bool
-}
-
-pub struct Thread {
-pub mut:
-	return_type Type
-}
-
-pub struct Map {
-pub mut:
-	key_type   Type
-	value_type Type
-}
-
-[minify]
-pub struct SumType {
-pub mut:
-	fields       []StructField
-	found_fields bool
-	is_anon      bool
-	// generic sumtype support
-	is_generic     bool
-	variants       []Type
-	generic_types  []Type
-	concrete_types []Type
-	parent_type    Type
-}
-
 // human readable type name, also used by vfmt
 pub fn (t &Table) type_to_str(typ Type) string {
 	return t.type_to_str_using_aliases(typ, map[string]string{})
@@ -1147,10 +1165,41 @@ pub fn (mytable &Table) type_to_code(t Type) string {
 	}
 }
 
-// clean type name from generics form. From Type<int> -> Type
+// clean type name from generics form. From Type[int] -> Type
 pub fn (t &Table) clean_generics_type_str(typ Type) string {
 	result := t.type_to_str(typ)
-	return result.all_before('<')
+	return result.all_before('[')
+}
+
+fn strip_extra_struct_types(name string) string {
+	mut start := 0
+	mut is_start := false
+	mut nested_count := 0
+	mut strips := []string{}
+
+	for i, ch in name {
+		if ch == `<` {
+			if is_start {
+				nested_count++
+			} else {
+				is_start = true
+				start = i
+			}
+		} else if ch == `>` {
+			if nested_count > 0 {
+				nested_count--
+			} else {
+				strips << name.substr(start, i + 1)
+				strips << ''
+				is_start = false
+			}
+		}
+	}
+	if strips.len > 0 {
+		return name.replace_each(strips)
+	} else {
+		return name
+	}
 }
 
 // import_aliases is a map of imported symbol aliases 'module.Type' => 'Type'
@@ -1263,14 +1312,14 @@ pub fn (t &Table) type_to_str_using_aliases(typ Type, import_aliases map[string]
 			if typ.has_flag(.generic) {
 				match sym.info {
 					Struct, Interface, SumType {
-						res += '<'
+						res += '['
 						for i, gtyp in sym.info.generic_types {
 							res += t.sym(gtyp).name
 							if i != sym.info.generic_types.len - 1 {
 								res += ', '
 							}
 						}
-						res += '>'
+						res += ']'
 					}
 					else {}
 				}
@@ -1279,23 +1328,24 @@ pub fn (t &Table) type_to_str_using_aliases(typ Type, import_aliases map[string]
 					import_aliases))
 				res = '${variant_names.join('|')}'
 			} else {
+				res = strip_extra_struct_types(res)
 				res = t.shorten_user_defined_typenames(res, import_aliases)
 			}
 		}
 		.generic_inst {
 			info := sym.info as GenericInst
-			res = t.shorten_user_defined_typenames(sym.name.all_before('<'), import_aliases)
-			res += '<'
+			res = t.shorten_user_defined_typenames(sym.name.all_before('['), import_aliases)
+			res += '['
 			for i, ctyp in info.concrete_types {
 				res += t.type_to_str_using_aliases(ctyp, import_aliases)
 				if i != info.concrete_types.len - 1 {
 					res += ', '
 				}
 			}
-			res += '>'
+			res += ']'
 		}
 		.void {
-			if typ.has_flag(.optional) {
+			if typ.has_flag(.option) {
 				res = '?'
 				return res
 			}
@@ -1336,7 +1386,7 @@ pub fn (t &Table) type_to_str_using_aliases(typ Type, import_aliases map[string]
 	if nr_muls > 0 && !typ.has_flag(.variadic) {
 		res = strings.repeat(`&`, nr_muls) + res
 	}
-	if typ.has_flag(.optional) {
+	if typ.has_flag(.option) {
 		res = '?${res}'
 	}
 	if typ.has_flag(.result) {
@@ -1364,16 +1414,18 @@ fn (t Table) shorten_user_defined_typenames(originalname string, import_aliases 
 		// mod.submod.submod2.Type => submod2.Type
 		mut parts := res.split('.')
 		if parts.len > 1 {
-			ind := parts.len - 2
-			if t.is_fmt {
-				// Rejoin the module parts for correct usage of aliases
-				parts[ind] = parts[..ind + 1].join('.')
-			}
-			if parts[ind] in import_aliases {
-				parts[ind] = import_aliases[parts[ind]]
-			}
+			if parts[..parts.len - 1].all(!it.contains('[')) {
+				ind := parts.len - 2
+				if t.is_fmt {
+					// Rejoin the module parts for correct usage of aliases
+					parts[ind] = parts[..ind + 1].join('.')
+				}
+				if parts[ind] in import_aliases {
+					parts[ind] = import_aliases[parts[ind]]
+				}
 
-			res = parts[ind..].join('.')
+				res = parts[ind..].join('.')
+			}
 		} else {
 			res = parts[0]
 		}
@@ -1435,27 +1487,27 @@ pub fn (t &Table) fn_signature_using_aliases(func &Fn, import_aliases map[string
 }
 
 // symbol_name_except_generic return the name of the complete qualified name of the type,
-// but without the generic parts. For example, `main.Abc<int>` -> `main.Abc`
+// but without the generic parts. For example, `main.Abc[int]` -> `main.Abc`
 pub fn (t &TypeSymbol) symbol_name_except_generic() string {
-	// main.Abc<int>
+	// main.Abc[int]
 	mut embed_name := t.name
 	// remove generic part from name
-	// main.Abc<int> => main.Abc
-	if embed_name.contains('<') {
-		embed_name = embed_name.all_before('<')
+	// main.Abc[int] => main.Abc
+	if embed_name.contains('[') {
+		embed_name = embed_name.all_before('[')
 	}
 	return embed_name
 }
 
 pub fn (t &TypeSymbol) embed_name() string {
-	// main.Abc<int> => Abc<int>
-	mut embed_name := t.name.split('.').last()
-	// remove generic part from name
-	// Abc<int> => Abc
-	if embed_name.contains('<') {
-		embed_name = embed_name.split('<')[0]
+	if t.name.contains('[') {
+		// Abc[int] => Abc
+		// main.Abc[main.Enum] => Abc
+		return t.name.split('[')[0].split('.').last()
+	} else {
+		// main.Abc => Abc
+		return t.name.split('.').last()
 	}
-	return embed_name
 }
 
 pub fn (t &TypeSymbol) has_method(name string) bool {
@@ -1576,6 +1628,12 @@ pub fn (t &TypeSymbol) find_field(name string) ?StructField {
 		SumType { return t.info.find_field(name) }
 		else { return none }
 	}
+}
+
+pub fn (t &TypeSymbol) has_field(name string) bool {
+	t.find_field(name) or { return false }
+
+	return true
 }
 
 fn (a &Aggregate) find_field(name string) ?StructField {

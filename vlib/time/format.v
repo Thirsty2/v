@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module time
@@ -18,6 +18,14 @@ pub fn (t Time) format_ss() string {
 // format_ss_milli returns a date string in "YYYY-MM-DD HH:mm:ss.123" format (24h).
 pub fn (t Time) format_ss_milli() string {
 	return '${t.year:04d}-${t.month:02d}-${t.day:02d} ${t.hour:02d}:${t.minute:02d}:${t.second:02d}.${(t.microsecond / 1000):03d}'
+}
+
+// format_rfc3339 returns a date string in "YYYY-MM-DDTHH:mm:ss.123Z" format (24 hours, see https://www.rfc-editor.org/rfc/rfc3339.html)
+// RFC3339 is an Internet profile, based on the ISO 8601 standard for for representation of dates and times using the Gregorian calendar.
+// It is intended to improve consistency and interoperability, when representing and using date and time in Internet protocols.
+pub fn (t Time) format_rfc3339() string {
+	u := t.local_to_utc()
+	return '${u.year:04d}-${u.month:02d}-${u.day:02d}T${u.hour:02d}:${u.minute:02d}:${u.second:02d}.${(u.microsecond / 1000):03d}Z'
 }
 
 // format_ss_micro returns a date string in "YYYY-MM-DD HH:mm:ss.123456" format (24h).
@@ -85,49 +93,49 @@ const (
 
 // custom_format returns a date with custom format
 //
-// |  | Token  | Output |
-// | ----------:  | :------ | :--------- |
-// | **Month**   | M | 1 2 ... 11 12 |
-// |  | Mo | 1st 2nd ... 11th 12th |
-// |  | MM | 01 02 ... 11 12 |
-// |  | MMM | 	Jan Feb ... Nov Dec |
-// |  | MMMM | January February ... November December |
-// | **Quarter**  | Q | 1 2 3 4 |
-// |  | QQ | 01 02 03 04 |
-// |  | Qo | 1st 2nd 3rd 4th |
-// | **Day of Month**  | D | 1 2 ... 30 31 |
-// |  | Do | 1st 2nd ... 30th 31st |
-// |  | DD | 01 02 ... 30 31 |
-// | **Day of Year**  | DDD | 1 2 ... 364 365 |
-// |  | DDDo | 1st 2nd ... 364th 365th |
-// |  | DDDD | 001 002 ... 364 365 |
-// | **Day of Week**  | d | 0 1 ... 5 6 (Sun-Sat) |
-// |  | c | 1 2 ... 6 7 (Mon-Sun) |
-// |  | dd | Su Mo ... Fr Sa |
-// |  | ddd | Sun Mon ... Fri Sat |
-// |  | dddd | Sunday Monday ... Friday Saturday |
-// | **Week of Year**  | w | 1 2 ... 52 53 |
-// |  | wo | 1st 2nd ... 52nd 53rd |
-// |  | ww | 01 02 ... 52 53 |
-// | **Year**  | YY | 70 71 ... 29 30 |
-// |  | YYYY | 1970 1971 ... 2029 2030 |
-// | **Era**  | N | BC AD |
-// |  | NN | Before Christ, Anno Domini |
-// | **AM/PM**  | A | AM PM |
-// |  | a | am pm |
-// | **Hour**  | H | 0 1 ... 22 23 |
-// |  | HH | 00 01 ... 22 23 |
-// |  | h | 1 2 ... 11 12 |
-// |  | hh | 01 02 ... 11 12 |
-// |  | k | 1 2 ... 23 24 |
-// |  | kk | 01 02 ... 23 24 |
-// | **Minute**  | m | 0 1 ... 58 59 |
-// |  | mm | 00 01 ... 58 59 |
-// | **Second**  | s | 0 1 ... 58 59 |
-// |  | ss | 00 01 ... 58 59 |
-// | **Offset**  | Z | -7 -6 ... +5 +6 |
-// |  | ZZ | -0700 -0600 ... +0500 +0600 |
-// |  | ZZZ | -07:00 -06:00 ... +05:00 +06:00 |
+// |                  | Token | Output                                 |
+// |-----------------:|:------|:---------------------------------------|
+// |        **Month** | M     | 1 2 ... 11 12                          |
+// |                  | Mo    | 1st 2nd ... 11th 12th                  |
+// |                  | MM    | 01 02 ... 11 12                        |
+// |                  | MMM   | Jan Feb ... Nov Dec                    |
+// |                  | MMMM  | January February ... November December |
+// |      **Quarter** | Q     | 1 2 3 4                                |
+// |                  | QQ    | 01 02 03 04                            |
+// |                  | Qo    | 1st 2nd 3rd 4th                        |
+// | **Day of Month** | D     | 1 2 ... 30 31                          |
+// |                  | Do    | 1st 2nd ... 30th 31st                  |
+// |                  | DD    | 01 02 ... 30 31                        |
+// |  **Day of Year** | DDD   | 1 2 ... 364 365                        |
+// |                  | DDDo  | 1st 2nd ... 364th 365th                |
+// |                  | DDDD  | 001 002 ... 364 365                    |
+// |  **Day of Week** | d     | 0 1 ... 5 6 (Sun-Sat)                  |
+// |                  | c     | 1 2 ... 6 7 (Mon-Sun)                  |
+// |                  | dd    | Su Mo ... Fr Sa                        |
+// |                  | ddd   | Sun Mon ... Fri Sat                    |
+// |                  | dddd  | Sunday Monday ... Friday Saturday      |
+// | **Week of Year** | w     | 1 2 ... 52 53                          |
+// |                  | wo    | 1st 2nd ... 52nd 53rd                  |
+// |                  | ww    | 01 02 ... 52 53                        |
+// |         **Year** | YY    | 70 71 ... 29 30                        |
+// |                  | YYYY  | 1970 1971 ... 2029 2030                |
+// |          **Era** | N     | BC AD                                  |
+// |                  | NN    | Before Christ, Anno Domini             |
+// |        **AM/PM** | A     | AM PM                                  |
+// |                  | a     | am pm                                  |
+// |         **Hour** | H     | 0 1 ... 22 23                          |
+// |                  | HH    | 00 01 ... 22 23                        |
+// |                  | h     | 1 2 ... 11 12                          |
+// |                  | hh    | 01 02 ... 11 12                        |
+// |                  | k     | 1 2 ... 23 24                          |
+// |                  | kk    | 01 02 ... 23 24                        |
+// |       **Minute** | m     | 0 1 ... 58 59                          |
+// |                  | mm    | 00 01 ... 58 59                        |
+// |       **Second** | s     | 0 1 ... 58 59                          |
+// |                  | ss    | 00 01 ... 58 59                        |
+// |       **Offset** | Z     | -7 -6 ... +5 +6                        |
+// |                  | ZZ    | -0700 -0600 ... +0500 +0600            |
+// |                  | ZZZ   | -07:00 -06:00 ... +05:00 +06:00        |
 //
 // Usage:
 // ```v

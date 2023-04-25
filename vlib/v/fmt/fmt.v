@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module fmt
@@ -11,7 +11,7 @@ import v.checker.constants
 
 const (
 	bs      = '\\'
-	// when to break a line dependant on penalty
+	// when to break a line depending on the penalty
 	max_len = [0, 35, 60, 85, 93, 100]
 )
 
@@ -48,6 +48,7 @@ pub mut:
 	in_lambda_depth    int
 	inside_const       bool
 	inside_unsafe      bool
+	inside_comptime_if bool
 	is_mbranch_expr    bool // match a { x...y { } }
 	fn_scope           &ast.Scope = unsafe { nil }
 	wsinfix_depth      int
@@ -60,11 +61,11 @@ pub struct FmtOptions {
 	source_text string
 }
 
-pub fn fmt(file ast.File, table &ast.Table, pref &pref.Preferences, is_debug bool, options FmtOptions) string {
+pub fn fmt(file ast.File, table &ast.Table, pref_ &pref.Preferences, is_debug bool, options FmtOptions) string {
 	mut f := Fmt{
 		file: file
 		table: table
-		pref: pref
+		pref: pref_
 		is_debug: is_debug
 		out: strings.new_builder(1000)
 		out_imports: strings.new_builder(200)
@@ -195,16 +196,17 @@ fn (mut f Fmt) write_language_prefix(lang ast.Language) {
 	match lang {
 		.c { f.write('C.') }
 		.js { f.write('JS.') }
+		.wasm { f.write('WASM.') }
 		else {}
 	}
 }
 
 fn (mut f Fmt) write_generic_types(gtypes []ast.Type) {
 	if gtypes.len > 0 {
-		f.write('<')
+		f.write('[')
 		gtypes_string := gtypes.map(f.table.type_to_str(it)).join(', ')
 		f.write(gtypes_string)
-		f.write('>')
+		f.write(']')
 	}
 }
 
@@ -248,14 +250,14 @@ pub fn (mut f Fmt) short_module(name string) string {
 	if name in f.mod2syms {
 		return f.mod2syms[name]
 	}
-	if name.ends_with('>') {
-		generic_levels := name.trim_string_right('>').split('<')
+	if name.ends_with(']') {
+		generic_levels := name.trim_string_right(']').split('[')
 		mut res := '${f.short_module(generic_levels[0])}'
 		for i in 1 .. generic_levels.len {
 			genshorts := generic_levels[i].split(', ').map(f.short_module(it)).join(', ')
-			res += '<${genshorts}'
+			res += '[${genshorts}'
 		}
-		res += '>'
+		res += ']'
 		return res
 	}
 	vals := name.split('.')
@@ -284,18 +286,25 @@ pub fn (mut f Fmt) short_module(name string) string {
 
 pub fn (mut f Fmt) mark_types_import_as_used(typ ast.Type) {
 	sym := f.table.sym(typ)
-	if sym.info is ast.Map {
-		map_info := sym.map_info()
-		f.mark_types_import_as_used(map_info.key_type)
-		f.mark_types_import_as_used(map_info.value_type)
-		return
-	}
-	if sym.info is ast.GenericInst {
-		for concrete_typ in sym.info.concrete_types {
-			f.mark_types_import_as_used(concrete_typ)
+	match sym.info {
+		ast.Map {
+			map_info := sym.map_info()
+			f.mark_types_import_as_used(map_info.key_type)
+			f.mark_types_import_as_used(map_info.value_type)
+			return
 		}
+		ast.Array, ast.ArrayFixed {
+			f.mark_types_import_as_used(sym.info.elem_type)
+			return
+		}
+		ast.GenericInst {
+			for concrete_typ in sym.info.concrete_types {
+				f.mark_types_import_as_used(concrete_typ)
+			}
+		}
+		else {}
 	}
-	name := sym.name.split('<')[0] // take `Type` from `Type<T>`
+	name := sym.name.split('[')[0] // take `Type` from `Type[T]`
 	f.mark_import_as_used(name)
 }
 
@@ -358,7 +367,8 @@ pub fn (mut f Fmt) imports(imports []ast.Import) {
 
 pub fn (f Fmt) imp_stmt_str(imp ast.Import) string {
 	mod := if imp.mod.len == 0 { imp.alias } else { imp.mod }
-	is_diff := imp.alias != mod && !mod.ends_with('.' + imp.alias)
+	normalized_mod := mod.all_after('src.') // Ignore the 'src.' folder prefix since src/ folder is root of code
+	is_diff := imp.alias != normalized_mod && !normalized_mod.ends_with('.' + imp.alias)
 	mut imp_alias_suffix := if is_diff { ' as ${imp.alias}' } else { '' }
 	mut syms := imp.syms.map(it.name).filter(f.import_syms_used[it])
 	syms.sort()
@@ -369,7 +379,7 @@ pub fn (f Fmt) imp_stmt_str(imp ast.Import) string {
 			' {\n\t' + syms.join(',\n\t') + ',\n}'
 		}
 	}
-	return '${mod}${imp_alias_suffix}'
+	return '${normalized_mod}${imp_alias_suffix}'
 }
 
 //=== Node helpers ===//
@@ -385,7 +395,7 @@ fn (f Fmt) should_insert_newline_before_node(node ast.Node, prev_node ast.Node) 
 		stmt := node
 		prev_stmt := prev_node
 		// Force a newline after a block of HashStmts
-		if prev_stmt is ast.HashStmt && stmt !is ast.HashStmt && stmt !is ast.ExprStmt {
+		if prev_stmt is ast.HashStmt && stmt !in [ast.HashStmt, ast.ExprStmt] {
 			return true
 		}
 		// Force a newline after function declarations
@@ -722,14 +732,17 @@ pub fn (mut f Fmt) expr(node_ ast.Expr) {
 		}
 		ast.ComptimeType {
 			match node.kind {
-				.array { f.write('\$Array') }
-				.struct_ { f.write('\$Struct') }
-				.iface { f.write('\$Interface') }
-				.map_ { f.write('\$Map') }
-				.int { f.write('\$Int') }
-				.float { f.write('\$Float') }
-				.sum_type { f.write('\$Sumtype') }
-				.enum_ { f.write('\$Enum') }
+				.array { f.write('\$array') }
+				.struct_ { f.write('\$struct') }
+				.iface { f.write('\$interface') }
+				.map_ { f.write('\$map') }
+				.int { f.write('\$int') }
+				.float { f.write('\$float') }
+				.sum_type { f.write('\$sumtype') }
+				.enum_ { f.write('\$enum') }
+				.alias { f.write('\$alias') }
+				.function { f.write('\$function') }
+				.option { f.write('\$option') }
 			}
 		}
 	}
@@ -1383,7 +1396,12 @@ pub fn (mut f Fmt) fn_type_decl(node ast.FnTypeDecl) {
 	fn_typ_info := typ_sym.info as ast.FnType
 	fn_info := fn_typ_info.func
 	fn_name := f.no_cur_mod(node.name)
-	f.write('type ${fn_name} = fn (')
+	mut generic_types_str := ''
+	if node.generic_types.len > 0 {
+		generic_names := node.generic_types.map(f.table.sym(it).name)
+		generic_types_str = '[${generic_names.join(', ')}]'
+	}
+	f.write('type ${fn_name}${generic_types_str} = fn (')
 	for i, arg in fn_info.params {
 		if arg.is_mut {
 			f.write(arg.typ.share().str() + ' ')
@@ -1418,7 +1436,7 @@ pub fn (mut f Fmt) fn_type_decl(node ast.FnTypeDecl) {
 		ret_str := f.no_cur_mod(f.table.type_to_str_using_aliases(fn_info.return_type,
 			f.mod2alias))
 		f.write(' ${ret_str}')
-	} else if fn_info.return_type.has_flag(.optional) {
+	} else if fn_info.return_type.has_flag(.option) {
 		f.write(' ?')
 	} else if fn_info.return_type.has_flag(.result) {
 		f.write(' !')
@@ -1762,7 +1780,11 @@ pub fn (mut f Fmt) call_expr(node ast.CallExpr) {
 		}
 	}
 	if node.mod == '' && node.name == '' {
-		f.write(node.left.str())
+		if node.left is ast.CallExpr {
+			f.expr(node.left)
+		} else {
+			f.write(node.left.str())
+		}
 	}
 	f.write_generic_call_if_require(node)
 	f.write('(')
@@ -1777,7 +1799,7 @@ pub fn (mut f Fmt) call_expr(node ast.CallExpr) {
 
 fn (mut f Fmt) write_generic_call_if_require(node ast.CallExpr) {
 	if node.concrete_types.len > 0 {
-		f.write('<')
+		f.write('[')
 		for i, concrete_type in node.concrete_types {
 			mut name := f.table.type_to_str_using_aliases(concrete_type, f.mod2alias)
 			tsym := f.table.sym(concrete_type)
@@ -1792,7 +1814,7 @@ fn (mut f Fmt) write_generic_call_if_require(node ast.CallExpr) {
 				f.write(', ')
 			}
 		}
-		f.write('>')
+		f.write(']')
 	}
 }
 
@@ -1877,7 +1899,7 @@ pub fn (mut f Fmt) comptime_call(node ast.ComptimeCall) {
 		if node.method_name == 'html' {
 			f.write('\$vweb.html()')
 		} else {
-			f.write("\$tmpl('${node.args_var}')")
+			f.write('\$tmpl(${node.args[0].expr})')
 		}
 	} else {
 		if node.is_embed {
@@ -1890,13 +1912,17 @@ pub fn (mut f Fmt) comptime_call(node ast.ComptimeCall) {
 			f.write("\$env('${node.args_var}')")
 		} else if node.is_pkgconfig {
 			f.write("\$pkgconfig('${node.args_var}')")
-		} else if node.method_name == 'compile_error' {
-			f.write("\$compile_error('${node.args_var}')")
+		} else if node.method_name in ['compile_error', 'compile_warn'] {
+			f.write("\$${node.method_name}('${node.args_var}')")
 		} else {
 			inner_args := if node.args_var != '' {
 				node.args_var
 			} else {
-				node.args.map(it.str()).join(', ')
+				node.args.map(if it.expr is ast.ArrayDecompose {
+					'...${it.expr.expr.str()}'
+				} else {
+					it.str()
+				}).join(', ')
 			}
 			method_expr := if node.has_parens {
 				'(${node.method_name}(${inner_args}))'
@@ -1992,12 +2018,18 @@ pub fn (mut f Fmt) ident(node ast.Ident) {
 		}
 		name := f.short_module(node.name)
 		f.write(name)
+		if node.or_expr.kind == .propagate_option {
+			f.write('?')
+		} else if node.or_expr.kind == .block {
+			f.or_expr(node.or_expr)
+		}
 		f.mark_import_as_used(name)
 	}
 }
 
 pub fn (mut f Fmt) if_expr(node ast.IfExpr) {
 	dollar := if node.is_comptime { '$' } else { '' }
+	f.inside_comptime_if = node.is_comptime
 	mut is_ternary := node.branches.len == 2 && node.has_else
 		&& branch_is_single_line(node.branches[0]) && branch_is_single_line(node.branches[1])
 		&& (node.is_expr || f.is_assign || f.is_struct_init || f.single_line_fields)
@@ -2057,6 +2089,7 @@ pub fn (mut f Fmt) if_expr(node ast.IfExpr) {
 	}
 	f.write('}')
 	f.single_line_if = false
+	f.inside_comptime_if = false
 	if node.post_comments.len > 0 {
 		f.writeln('')
 		f.comments(node.post_comments,
@@ -2114,11 +2147,25 @@ pub fn (mut f Fmt) infix_expr(node ast.InfixExpr) {
 	}
 	start_pos := f.out.len
 	start_len := f.line_len
-	f.expr(node.left)
+	mut redundant_par := false
+	if node.left is ast.ParExpr && node.op in [.and, .logical_or] {
+		if node.left.expr is ast.InfixExpr {
+			if node.left.expr.op !in [.and, .logical_or] {
+				redundant_par = true
+				f.expr(node.left.expr)
+			}
+		}
+	}
+	if !redundant_par {
+		f.expr(node.left)
+	}
+	if node.before_op_comments.len > 0 {
+		f.comments(node.before_op_comments, iembed: node.before_op_comments[0].is_inline)
+	}
 	is_one_val_array_init := node.op in [.key_in, .not_in] && node.right is ast.ArrayInit
 		&& (node.right as ast.ArrayInit).exprs.len == 1
 	is_and := node.op == .amp && f.node_str(node.right).starts_with('&')
-	if is_one_val_array_init {
+	if is_one_val_array_init && !f.inside_comptime_if {
 		// `var in [val]` => `var == val`
 		op := if node.op == .key_in { ' == ' } else { ' != ' }
 		f.write(op)
@@ -2127,13 +2174,28 @@ pub fn (mut f Fmt) infix_expr(node ast.InfixExpr) {
 	} else {
 		f.write(' ${node.op.str()} ')
 	}
-	if is_one_val_array_init {
+	if node.after_op_comments.len > 0 {
+		f.comments(node.after_op_comments, iembed: node.after_op_comments[0].is_inline)
+		f.write(' ')
+	}
+	if is_one_val_array_init && !f.inside_comptime_if {
 		// `var in [val]` => `var == val`
 		f.expr((node.right as ast.ArrayInit).exprs[0])
 	} else if is_and {
 		f.write(f.node_str(node.right).trim_string_left('&'))
 	} else {
-		f.expr(node.right)
+		redundant_par = false
+		if node.right is ast.ParExpr && node.op in [.and, .logical_or] {
+			if node.right.expr is ast.InfixExpr {
+				if node.right.expr.op !in [.and, .logical_or] {
+					redundant_par = true
+					f.expr(node.right.expr)
+				}
+			}
+		}
+		if !redundant_par {
+			f.expr(node.right)
+		}
 	}
 	if !buffering_save && f.buffering {
 		f.buffering = false
@@ -2326,15 +2388,17 @@ pub fn (mut f Fmt) map_init(node ast.MapInit) {
 	for key in node.keys {
 		skey := f.node_str(key).trim_space()
 		skeys << skey
-		if skey.len > max_field_len {
-			max_field_len = skey.len
+		skey_len := skey.len_utf8()
+		if skey_len > max_field_len {
+			max_field_len = skey_len
 		}
 	}
 	for i, _ in node.keys {
 		skey := skeys[i]
 		f.write(skey)
 		f.write(': ')
-		f.write(strings.repeat(` `, max_field_len - skey.len))
+		skey_len := skey.len_utf8()
+		f.write(strings.repeat(` `, max_field_len - skey_len))
 		f.expr(node.vals[i])
 		f.comments(node.comments[i], prev_line: node.vals[i].pos().last_line, has_nl: false)
 		f.writeln('')
@@ -2572,23 +2636,43 @@ pub fn (mut f Fmt) selector_expr(node ast.SelectorExpr) {
 }
 
 pub fn (mut f Fmt) size_of(node ast.SizeOf) {
-	f.write('sizeof(')
-	if node.is_type {
+	f.write('sizeof')
+	if node.is_type && !node.guessed_type {
+		// the new form was explicitly written in the source code; keep it:
+		f.write('[')
 		f.write(f.table.type_to_str_using_aliases(node.typ, f.mod2alias))
-	} else {
-		f.expr(node.expr)
+		f.write(']()')
+		return
 	}
-	f.write(')')
+	if node.is_type {
+		f.write('(')
+		f.write(f.table.type_to_str_using_aliases(node.typ, f.mod2alias))
+		f.write(')')
+	} else {
+		f.write('(')
+		f.expr(node.expr)
+		f.write(')')
+	}
 }
 
 pub fn (mut f Fmt) is_ref_type(node ast.IsRefType) {
-	f.write('isreftype(')
-	if node.is_type {
+	f.write('isreftype')
+	if node.is_type && !node.guessed_type {
+		// the new form was explicitly written in the source code; keep it:
+		f.write('[')
 		f.write(f.table.type_to_str_using_aliases(node.typ, f.mod2alias))
-	} else {
-		f.expr(node.expr)
+		f.write(']()')
+		return
 	}
-	f.write(')')
+	if node.is_type {
+		f.write('(')
+		f.write(f.table.type_to_str_using_aliases(node.typ, f.mod2alias))
+		f.write(')')
+	} else {
+		f.write('(')
+		f.expr(node.expr)
+		f.write(')')
+	}
 }
 
 pub fn (mut f Fmt) sql_expr(node ast.SqlExpr) {
@@ -2729,9 +2813,16 @@ pub fn (mut f Fmt) type_expr(node ast.TypeNode) {
 }
 
 pub fn (mut f Fmt) type_of(node ast.TypeOf) {
-	f.write('typeof(')
-	f.expr(node.expr)
-	f.write(')')
+	f.write('typeof')
+	if node.is_type {
+		f.write('[')
+		f.write(f.table.type_to_str_using_aliases(node.typ, f.mod2alias))
+		f.write(']()')
+	} else {
+		f.write('(')
+		f.expr(node.expr)
+		f.write(')')
+	}
 }
 
 pub fn (mut f Fmt) unsafe_expr(node ast.UnsafeExpr) {

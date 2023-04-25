@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module markused
 
@@ -152,7 +152,9 @@ pub fn (mut w Walker) stmt(node_ ast.Stmt) {
 				// the .next() method of the struct will be used for iteration:
 				cond_type_sym := w.table.sym(node.cond_type)
 				if next_fn := cond_type_sym.find_method('next') {
-					w.fn_decl(mut &ast.FnDecl(next_fn.source_fn))
+					unsafe {
+						w.fn_decl(mut &ast.FnDecl(next_fn.source_fn))
+					}
 				}
 			}
 		}
@@ -303,7 +305,9 @@ fn (mut w Walker) expr(node_ ast.Expr) {
 			sym := w.table.sym(node.left_type)
 			if sym.kind == .struct_ {
 				if opmethod := sym.find_method(node.op.str()) {
-					w.fn_decl(mut &ast.FnDecl(opmethod.source_fn))
+					unsafe {
+						w.fn_decl(mut &ast.FnDecl(opmethod.source_fn))
+					}
 				}
 			}
 			if node.right_type == 0 {
@@ -510,7 +514,7 @@ pub fn (mut w Walker) call_expr(mut node ast.CallExpr) {
 	w.mark_fn_as_used(fn_name)
 	stmt := w.all_fns[fn_name] or { return }
 	if stmt.name == node.name {
-		if !node.is_method || (node.receiver_type == stmt.receiver.typ) {
+		if !node.is_method || node.receiver_type == stmt.receiver.typ {
 			w.stmts(stmt.stmts)
 		}
 	}

@@ -11,7 +11,7 @@ pub interface DataI {
 	from_primeset(PrimeSet) DataI
 }
 
-pub fn (di DataI) cast<T>() DataI {
+pub fn (di DataI) cast[T]() DataI {
 	return T{}.from_primeset(di.to_primeset())
 }
 
@@ -51,7 +51,7 @@ pub fn (p PrimeSet) str() string {
 
 fn extract_count(s string) int {
 	digits := '0123456789'.split('')
-	if (s == '') || !s.split('').any(it in digits) {
+	if s == '' || !s.split('').any(it in digits) {
 		return 0
 	}
 	ds := s.split('').filter(it in digits)

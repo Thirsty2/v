@@ -58,8 +58,8 @@ pub:
 	cap u32 // queue length in #objects
 }
 
-pub fn new_channel<T>(n u32) &Channel {
-	st := sizeof(T)
+pub fn new_channel[T](n u32) &Channel {
+	st := if sizeof(T) > 0 { sizeof(T) } else { 1 }
 	if isreftype(T) {
 		return new_channel_st(n, st)
 	} else {

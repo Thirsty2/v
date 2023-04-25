@@ -99,7 +99,7 @@ fn foo_str() ?string {
 	return 'something'
 }
 
-fn propagate_optional(b bool) ?int {
+fn propagate_option(b bool) ?int {
 	a := err_call(b)?
 	return a
 }
@@ -111,11 +111,11 @@ fn propagate_different_type(b bool) ?bool {
 
 fn test_propagation() {
 	println(1)
-	a := propagate_optional(true) or { 0 }
+	a := propagate_option(true) or { 0 }
 	println(2)
 	assert a == 42
 	println(3)
-	if _ := propagate_optional(false) {
+	if _ := propagate_option(false) {
 		assert false
 	}
 	println(4)
@@ -180,52 +180,59 @@ fn test_reassignment() {
 	assert x3 == 777
 }
 
-struct Person {
+struct OptionFieldsStruct {
 mut:
-	name  string
-	age   int
-	title ?string
+	text ?string
+	n    ?int
+	n1   ?int = 1
 }
 
-fn test_field_or() {
-	name := foo_str() or { 'nada' }
-	assert name == 'something'
-	/*
-	QTODO
-	mut p := Person{}
-	p.name = foo_str() or {
-		'nothing'
+fn get_opt_struct() ?OptionFieldsStruct {
+	return OptionFieldsStruct{}
+}
+
+fn test_option_field() ? {
+	mut v := OptionFieldsStruct{}
+	assert v.text or { 'default' } == 'default'
+	assert v.n or { 42 } == 42
+	assert v.n1 or { 42 } == 1
+	assert (v.n or { v.n1? }) == 1
+
+	if n := v.n {
+		assert false
+	} else {
+		assert true
 	}
-	assert p.name == 'something'
-	p.age = foo_ok() or {
-		panic('no age')
+	if n1 := v.n1 {
+		assert n1 == 1
+	} else {
+		assert false
 	}
-	assert p.age == 777
-	mytitle := p.title or {
-		'default'
+
+	n := v.n or { 10 }
+	assert n == 10
+	n1 := v.n1 or { 10 }
+	assert n1 == 1
+	n1_1 := v.n1? + (v.n or { 10 })
+	assert n1_1 == 11
+
+	v.text = 'text'
+	assert v.text? == 'text'
+	v.n = 42
+	assert v.n? == 42
+	v.n1 = 43
+	assert v.n1? == 43
+
+	v = OptionFieldsStruct{
+		text: 'init'
+		n: 0
+		n1: none
 	}
-	assert mytitle == 'default'
-	*/
-}
+	assert v.text? == 'init'
+	assert v.n? == 0
+	assert v.n1 or { 42 } == 42
 
-struct Thing {
-mut:
-	opt ?int
-}
-
-struct Thing2 {
-mut:
-	opt ?Thing
-}
-
-fn test_opt_field() {
-	/*
-	QTODO
-	mut t := Thing{}
-	t.opt = 5
-	val := t.opt or { return }
-	assert val == 5
-	*/
+	assert get_opt_struct()?.n1? == 1
 }
 
 fn opt_ptr(a &int) ?&int {
@@ -269,12 +276,12 @@ fn test_multi_return_opt() {
 }
 */
 
-fn test_optional_val_with_empty_or() {
+fn test_option_val_with_empty_or() {
 	ret_none() or {}
 	assert true
 }
 
-fn test_optional_void_return_types_of_anon_fn() {
+fn test_option_void_return_types_of_anon_fn() {
 	f := fn (i int) ? {
 		if i == 0 {
 			return error('0')
@@ -320,7 +327,7 @@ struct CC {
 	str string
 }
 
-fn optional_sum_type(a int) ?AA {
+fn option_sum_type(a int) ?AA {
 	match a {
 		1 {
 			return BB{'Test'}
@@ -334,12 +341,12 @@ fn optional_sum_type(a int) ?AA {
 	}
 }
 
-fn test_optional_sum_type() {
-	res1 := optional_sum_type(1) or {
+fn test_option_sum_type() {
+	res1 := option_sum_type(1) or {
 		assert false
 		BB{}
 	}
-	res2 := optional_sum_type(2) or {
+	res2 := option_sum_type(2) or {
 		assert false
 		CC{}
 	}
@@ -353,16 +360,11 @@ fn test_optional_sum_type() {
 	} else {
 		assert false
 	}
-	optional_sum_type(3) or {
+	option_sum_type(3) or {
 		assert true
 		return
 	}
 	assert false
-}
-
-struct MultiOptionalFieldTest {
-	a ?int
-	b ?int
 }
 
 fn foo() ?int {
@@ -386,20 +388,20 @@ fn get_opt_pointer_to_c_struct() ?&C.stat {
 	return none
 }
 
-fn test_optional_ref_c_struct_gen() {
+fn test_option_ref_c_struct_gen() {
 	_ := get_opt_pointer_to_c_struct() or { &C.stat{} }
 }
 
-// For issue #16070: cgen error: missing * of optional non-ref structs
+// For issue #16070: cgen error: missing * of option non-ref structs
 fn get_opt_to_c_struct() ?C.stat {
 	return none
 }
 
-fn test_optional_c_struct_gen() {
+fn test_option_c_struct_gen() {
 	_ := get_opt_to_c_struct() or { C.stat{} }
 }
 
-// For issue #16062: checker disallow the return of voidptr(nil) in or block
+// For issue #16062: checker disallowed the return of voidptr(nil) in or block
 struct Bar {}
 
 fn get_bar(should_return_value bool) ?&Bar {
@@ -409,7 +411,7 @@ fn get_bar(should_return_value bool) ?&Bar {
 	return none
 }
 
-fn test_() {
+fn test_allow_returning_an_optional_pointer_to_a_struct() {
 	a := get_bar(true)?
 	assert a == unsafe { nil }
 	//
@@ -421,4 +423,20 @@ fn test_() {
 	//
 	get_bar(false) or { unsafe { nil } }
 	assert true
+}
+
+struct AFoo {
+mut:
+	name string
+}
+
+fn (mut f AFoo) opt_string(arr ?[]int) ?string {
+	return arr?.len.str()
+}
+
+fn test_creating_an_option_from_a_struct_value() {
+	mut m := ?AFoo(AFoo{})
+	assert m?.opt_string([1, 2, 3])? == '3'
+	m?.name = 'foo'
+	assert m?.name == 'foo'
 }

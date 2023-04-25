@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 //
@@ -28,6 +28,7 @@ fn wyrotr(v u64, k u32) u64 {
 	return (v >> k) | (v << (64 - k))
 }
 
+// wymum returns a hash by performing multiply and mix on `a` and `b`.
 [inline]
 pub fn wymum(a u64, b u64) u64 {
 	/*

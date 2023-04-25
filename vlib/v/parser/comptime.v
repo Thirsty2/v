@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module parser
@@ -11,8 +11,8 @@ import v.token
 const (
 	supported_comptime_calls = ['html', 'tmpl', 'env', 'embed_file', 'pkgconfig', 'compile_error',
 		'compile_warn']
-	comptime_types           = ['Map', 'Array', 'Int', 'Float', 'Struct', 'Interface', 'Enum',
-		'Sumtype']
+	comptime_types           = ['map', 'array', 'int', 'float', 'struct', 'interface', 'enum',
+		'sumtype', 'alias', 'function', 'option']
 )
 
 pub fn (mut p Parser) parse_comptime_type() ast.ComptimeType {
@@ -25,29 +25,38 @@ pub fn (mut p Parser) parse_comptime_type() ast.ComptimeType {
 	}
 	mut cty := ast.ComptimeTypeKind.map_
 	match name {
-		'Map' {
+		'map' {
 			cty = .map_
 		}
-		'Struct' {
+		'struct' {
 			cty = .struct_
 		}
-		'Interface' {
+		'interface' {
 			cty = .iface
 		}
-		'Int' {
+		'int' {
 			cty = .int
 		}
-		'Float' {
+		'float' {
 			cty = .float
 		}
-		'Array' {
+		'alias' {
+			cty = .alias
+		}
+		'function' {
+			cty = .function
+		}
+		'array' {
 			cty = .array
 		}
-		'Enum' {
+		'enum' {
 			cty = .enum_
 		}
-		'Sumtype' {
+		'sumtype' {
 			cty = .sum_type
+		}
+		'option' {
+			cty = .option
 		}
 		else {}
 	}
@@ -121,7 +130,18 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 			pos: start_pos.extend(p.prev_tok.pos())
 		}
 	}
-	literal_string_param := if is_html { '' } else { p.tok.lit }
+	mut literal_string_param := if is_html { '' } else { p.tok.lit }
+	if p.tok.kind == .name {
+		if var := p.scope.find_var(p.tok.lit) {
+			if var.expr is ast.StringLiteral {
+				literal_string_param = var.expr.val
+			}
+		} else if var := p.table.global_scope.find_const(p.mod + '.' + p.tok.lit) {
+			if var.expr is ast.StringLiteral {
+				literal_string_param = var.expr.val
+			}
+		}
+	}
 	path_of_literal_string_param := literal_string_param.replace('/', os.path_separator)
 	mut arg := ast.CallArg{}
 	if !is_html {
@@ -186,6 +206,7 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 					is_vweb: true
 					method_name: method_name
 					args_var: literal_string_param
+					args: [arg]
 					pos: start_pos.extend(p.prev_tok.pos())
 				}
 			}
@@ -227,14 +248,17 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 		vweb_tmpl: file
 		method_name: method_name
 		args_var: literal_string_param
+		args: [arg]
 		pos: start_pos.extend(p.prev_tok.pos())
 	}
 }
 
 fn (mut p Parser) comptime_for() ast.ComptimeFor {
 	// p.comptime_for() handles these special forms:
-	// $for method in App(methods) {
-	// $for field in App(fields) {
+	// `$for method in App.methods {`
+	// `$for val in App.values {`
+	// `$for field in App.fields {`
+	// `$for attr in App.attributes {`
 	p.next()
 	p.check(.key_for)
 	var_pos := p.tok.pos()
@@ -254,6 +278,13 @@ fn (mut p Parser) comptime_for() ast.ComptimeFor {
 			typ: p.table.find_type_idx('FunctionData')
 			pos: var_pos
 		})
+	} else if for_val == 'values' {
+		p.scope.register(ast.Var{
+			name: val_var
+			typ: p.table.find_type_idx('EnumData')
+			pos: var_pos
+		})
+		kind = .values
 	} else if for_val == 'fields' {
 		p.scope.register(ast.Var{
 			name: val_var
@@ -269,7 +300,7 @@ fn (mut p Parser) comptime_for() ast.ComptimeFor {
 		})
 		kind = .attributes
 	} else {
-		p.error_with_pos('unknown kind `${for_val}`, available are: `methods`, `fields` or `attributes`',
+		p.error_with_pos('unknown kind `${for_val}`, available are: `methods`, `fields`, `values`, or `attributes`',
 			p.prev_tok.pos())
 		return ast.ComptimeFor{}
 	}

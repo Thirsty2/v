@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module parser
@@ -52,6 +52,8 @@ pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 				&& p.file_base in ['map.v', 'map_d_gcboehm_opt.v']) {
 				p.error_with_pos("deprecated map syntax, use syntax like `{'age': 20}`",
 					p.tok.pos())
+			} else if p.tok.kind == .question && p.peek_tok.kind == .amp {
+				node = p.prefix_expr()
 			} else {
 				if p.inside_comptime_if && p.is_generic_name() && p.peek_tok.kind != .dot {
 					// $if T is string {}
@@ -77,7 +79,7 @@ pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 		}
 		.dollar {
 			match p.peek_tok.kind {
-				.name {
+				.name, .key_struct, .key_enum, .key_interface {
 					if p.peek_tok.lit in comptime_types {
 						node = p.parse_comptime_type()
 					} else {
@@ -193,7 +195,7 @@ pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 					pos: pos
 				}
 			} else {
-				node = p.array_init()
+				node = p.array_init(false)
 			}
 		}
 		.key_none {
@@ -203,74 +205,117 @@ pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 				pos: pos
 			}
 		}
-		.key_sizeof, .key_isreftype {
-			is_reftype := p.tok.kind == .key_isreftype
-			p.next() // sizeof
-			p.check(.lpar)
-			pos := p.tok.pos()
-			mut is_known_var := p.mark_var_as_used(p.tok.lit)
-				|| p.table.global_scope.known_const(p.mod + '.' + p.tok.lit)
-			//|| p.table.known_fn(p.mod + '.' + p.tok.lit)
-			// assume `mod.` prefix leads to a type
-			mut is_type := p.known_import(p.tok.lit) || p.tok.kind.is_start_of_type()
-				|| (p.tok.lit.len > 0 && p.tok.lit[0].is_capital())
-
-			if p.tok.lit in ['c', 'r'] && p.peek_tok.kind == .string {
-				is_known_var = false
-				is_type = false
-			}
-			if is_known_var || !is_type {
-				expr := p.expr(0)
-				if is_reftype {
-					node = ast.IsRefType{
-						is_type: false
-						expr: expr
-						pos: pos
-					}
-				} else {
-					node = ast.SizeOf{
-						is_type: false
-						expr: expr
-						pos: pos
-					}
-				}
-			} else {
-				if p.tok.kind == .name {
-					p.register_used_import(p.tok.lit)
-				}
-				save_expr_mod := p.expr_mod
-				p.expr_mod = ''
-				arg_type := p.parse_type()
-				p.expr_mod = save_expr_mod
-				if is_reftype {
-					node = ast.IsRefType{
-						is_type: true
-						typ: arg_type
-						pos: pos
-					}
-				} else {
-					node = ast.SizeOf{
-						is_type: true
-						typ: arg_type
-						pos: pos
-					}
-				}
-			}
-			p.check(.rpar)
-		}
 		.key_typeof {
 			spos := p.tok.pos()
 			p.next()
-			p.check(.lpar)
-			expr := p.expr(0)
-			p.check(.rpar)
-			if p.tok.kind != .dot && p.tok.line_nr == p.prev_tok.line_nr {
-				p.warn_with_pos('use e.g. `typeof(expr).name` or `sum_type_instance.type_name()` instead',
-					spos)
+			if p.tok.kind == .lsbr {
+				p.check(.lsbr)
+				type_pos := p.tok.pos()
+				typ := p.parse_type()
+				p.check(.rsbr)
+				p.check(.lpar)
+				p.check(.rpar)
+				node = ast.TypeOf{
+					is_type: true
+					typ: typ
+					pos: type_pos.extend(p.tok.pos())
+				}
+			} else {
+				p.check(.lpar)
+				expr := p.expr(0)
+				p.check(.rpar)
+				if p.tok.kind != .dot && p.tok.line_nr == p.prev_tok.line_nr {
+					p.warn_with_pos('use e.g. `typeof(expr).name` or `sum_type_instance.type_name()` instead',
+						spos)
+				}
+				node = ast.TypeOf{
+					is_type: false
+					expr: expr
+					pos: spos.extend(p.tok.pos())
+				}
 			}
-			node = ast.TypeOf{
-				expr: expr
-				pos: spos.extend(p.tok.pos())
+		}
+		.key_sizeof, .key_isreftype {
+			is_reftype := p.tok.kind == .key_isreftype
+			p.next() // sizeof
+
+			if p.tok.kind == .lsbr {
+				// parse sizeof[T]() and isreftype[T]() without guessing:
+				p.check(.lsbr)
+				mut type_pos := p.tok.pos()
+				typ := p.parse_type()
+				type_pos = type_pos.extend(p.tok.pos())
+				p.check(.rsbr)
+				p.check(.lpar)
+				p.check(.rpar)
+				if is_reftype {
+					node = ast.IsRefType{
+						is_type: true
+						typ: typ
+						pos: type_pos
+					}
+				} else {
+					node = ast.SizeOf{
+						is_type: true
+						typ: typ
+						pos: type_pos
+					}
+				}
+			} else {
+				p.check(.lpar)
+				pos := p.tok.pos()
+				mut is_known_var := p.mark_var_as_used(p.tok.lit)
+					|| p.table.global_scope.known_const(p.mod + '.' + p.tok.lit)
+				//|| p.table.known_fn(p.mod + '.' + p.tok.lit)
+				// assume `mod.` prefix leads to a type
+				mut is_type := p.known_import(p.tok.lit)
+					|| p.tok.kind.is_start_of_type()
+					|| (p.tok.lit.len > 0 && p.tok.lit[0].is_capital())
+
+				if p.tok.lit in ['c', 'r'] && p.peek_tok.kind == .string {
+					is_known_var = false
+					is_type = false
+				}
+				if is_known_var || !is_type {
+					expr := p.expr(0)
+					if is_reftype {
+						node = ast.IsRefType{
+							is_type: false
+							expr: expr
+							pos: pos
+						}
+					} else {
+						node = ast.SizeOf{
+							is_type: false
+							expr: expr
+							pos: pos
+						}
+					}
+				} else {
+					if p.tok.kind == .name {
+						p.register_used_import(p.tok.lit)
+					}
+					save_expr_mod := p.expr_mod
+					p.expr_mod = ''
+					arg_type := p.parse_type()
+					p.expr_mod = save_expr_mod
+					if is_reftype {
+						node = ast.IsRefType{
+							guessed_type: true
+							is_type: true
+							typ: arg_type
+							pos: pos
+						}
+					} else {
+						node = ast.SizeOf{
+							guessed_type: true
+							is_type: true
+							typ: arg_type
+							pos: pos
+						}
+					}
+				}
+				p.check(.rpar)
 			}
 		}
 		.key_dump {
@@ -344,22 +389,54 @@ pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 					pos := p.tok.pos()
 					args := p.call_args()
 					p.check(.rpar)
+					mut or_kind := ast.OrKind.absent
+					mut or_stmts := []ast.Stmt{} // TODO remove unnecessary allocations by just using .absent
+					mut or_pos := p.tok.pos()
+					if p.tok.kind == .key_orelse {
+						// `foo() or {}``
+						or_kind = .block
+						or_stmts, or_pos = p.or_block(.with_err_var)
+					}
+					if p.tok.kind in [.question, .not] {
+						is_not := p.tok.kind == .not
+						// `foo()?`
+						p.next()
+						if p.inside_defer {
+							p.error_with_pos('error propagation not allowed inside `defer` blocks',
+								p.prev_tok.pos())
+						}
+						or_kind = if is_not { .propagate_result } else { .propagate_option }
+					}
+
 					node = ast.CallExpr{
 						name: 'anon'
 						left: node
 						args: args
 						pos: pos
+						or_block: ast.OrExpr{
+							stmts: or_stmts
+							kind: or_kind
+							pos: or_pos
+						}
 						scope: p.scope
 					}
 				}
 				return node
 			}
 		}
+		.inc, .dec {
+			same_line_with_next := p.tok.line_nr == p.peek_tok.line_nr
+			next_tok_name := p.peek_tok.kind == .name
+
+			if next_tok_name && same_line_with_next {
+				p.prefix_inc_dec_error()
+			}
+		}
 		else {
 			if p.tok.kind == .key_struct && p.peek_tok.kind == .lcbr {
 				// Anonymous struct
 				p.next()
-				return p.struct_init('', .anon)
+				return p.struct_init('', .anon, false)
 			}
 			if p.tok.kind != .eof && !(p.tok.kind == .rsbr && p.inside_asm) {
 				// eof should be handled where it happens
@@ -377,6 +454,10 @@ pub fn (mut p Parser) check_expr(precedence int) !ast.Expr {
 	if p.inside_if_cond {
 		p.if_cond_comments << p.eat_comments()
 	}
+	if p.pref.is_fmt && p.tok.kind == .comment && p.peek_tok.kind.is_infix() && !p.inside_infix
+		&& !(p.peek_tok.kind == .mul && p.peek_tok.pos().line_nr != p.tok.pos().line_nr) {
+		p.left_comments = p.eat_comments()
+	}
 	return p.expr_with_left(node, precedence, is_stmt_ident)
 }
 
@@ -385,8 +466,11 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 	if p.inside_asm && p.prev_tok.pos().line_nr < p.tok.pos().line_nr {
 		return node
 	}
+
+	p.process_custom_orm_operators()
+
 	// Infix
-	for precedence < p.tok.precedence() {
+	for precedence < p.tok.kind.precedence() {
 		if p.tok.kind == .dot {
 			// no spaces or line break before dot in map_init
 			if p.inside_map_init && p.tok.pos - p.prev_tok.pos > p.prev_tok.len {
@@ -468,10 +552,33 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 						p.tok.pos())
 				}
 			}
-			if p.tok.kind in [.inc, .dec] && p.prev_tok.line_nr != p.tok.line_nr {
+
+			inc_dec_tok := p.tok.kind in [.inc, .dec]
+			same_line_with_prev := p.tok.line_nr == p.prev_tok.line_nr
+			same_line_with_next := p.tok.line_nr == p.peek_tok.line_nr
+			next_tok_name := p.peek_tok.kind == .name
+
+			// 1. name
+			// 2. ++
+			//    ^^ current token
+			if inc_dec_tok && !same_line_with_prev && !next_tok_name {
 				p.error_with_pos('${p.tok} must be on the same line as the previous token',
 					p.tok.pos())
 			}
+
+			// a++ a--
+			//  ^^ current token
+			// a[i]++ a--
+			//     ^^ current token
+			// check if op attached to previous name
+			prev_name_or_rsbr := p.prev_tok.kind in [.name, .rsbr]
+			// 1. ++name
+			//    ^^ current token
+			if inc_dec_tok && same_line_with_next && next_tok_name
+				&& (!prev_name_or_rsbr || !same_line_with_prev) {
+				p.prefix_inc_dec_error()
+			}
+
 			if mut node is ast.IndexExpr {
 				node.recursive_mapset_is_setter(true)
 			}
@@ -495,17 +602,29 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 }
 
 fn (mut p Parser) infix_expr(left ast.Expr) ast.Expr {
+	prev_inside_infix := p.inside_infix
+	p.inside_infix = true
+	defer {
+		p.inside_infix = prev_inside_infix
+	}
 	op := p.tok.kind
 	if op == .arrow {
 		p.or_is_handled = true
 		p.register_auto_import('sync')
 	}
-	precedence := p.tok.precedence()
+	precedence := p.tok.kind.precedence()
 	mut pos := p.tok.pos()
 	p.next()
 	if p.inside_if_cond {
 		p.if_cond_comments << p.eat_comments()
 	}
+	mut before_op_comments := []ast.Comment{}
+	if p.pref.is_fmt && p.left_comments.len > 0 {
+		before_op_comments = p.left_comments.clone()
+		p.left_comments = []
+	}
+	p.left_comments = []
+	after_op_comments := p.eat_comments()
 	mut right := ast.empty_expr
 	prev_expecting_type := p.expecting_type
 	if op in [.key_is, .not_is] {
@@ -548,6 +667,8 @@ fn (mut p Parser) infix_expr(left ast.Expr) ast.Expr {
 		op: op
 		pos: pos
 		is_stmt: p.is_stmt_ident
+		before_op_comments: before_op_comments
+		after_op_comments: after_op_comments
 		or_block: ast.OrExpr{
 			stmts: or_stmts
 			kind: or_kind
@@ -562,6 +683,10 @@ fn (p &Parser) fileis(s string) bool {
 
 fn (mut p Parser) prefix_expr() ast.Expr {
 	mut pos := p.tok.pos()
+	is_option := p.tok.kind == .question
+	if is_option {
+		p.next()
+	}
 	op := p.tok.kind
 	if op == .amp {
 		p.is_amp = true
@@ -580,6 +705,9 @@ fn (mut p Parser) prefix_expr() ast.Expr {
 		if mut right is ast.CastExpr {
 			// Handle &Type(x), as well as &&Type(x) etc:
 			p.recast_as_pointer(mut right, pos)
+			if is_option {
+				right.typ = right.typ.set_flag(.option)
+			}
 			return right
 		}
 		if mut right is ast.SelectorExpr {
@@ -613,11 +741,14 @@ fn (mut p Parser) prefix_expr() ast.Expr {
 	mut or_pos := p.tok.pos()
 	// allow `x := <-ch or {...}` to handle closed channel
 	if op == .arrow {
-		if p.tok.kind == .key_orelse {
+		if mut right is ast.SelectorExpr {
+			or_kind = right.or_block.kind
+			or_stmts = right.or_block.stmts.clone()
+			right.or_block = ast.OrExpr{}
+		} else if p.tok.kind == .key_orelse {
 			or_kind = .block
 			or_stmts, or_pos = p.or_block(.with_err_var)
-		}
-		if p.tok.kind == .question {
+		} else if p.tok.kind == .question {
 			p.next()
 			or_kind = .propagate_option
 		}
@@ -640,4 +771,40 @@ fn (mut p Parser) recast_as_pointer(mut cast_expr ast.CastExpr, pos token.Pos) {
 	cast_expr.typ = cast_expr.typ.ref()
 	cast_expr.typname = p.table.sym(cast_expr.typ).name
 	cast_expr.pos = pos.extend(cast_expr.pos)
+}
+
+// prefix_inc_dec_error reports an error for a prefix increment or decrement.
+// prefix increments and decrements are not allowed in V.
+fn (mut p Parser) prefix_inc_dec_error() {
+	op := if p.tok.kind == .inc { '++' } else { '--' }
+	op_pos := p.tok.pos()
+
+	p.next()
+	expr := p.expr(0) // expression `mp["name"]` after `--` in `--mp["name"]`
+	full_expr_pos := op_pos.extend(expr.pos()) // position of full `--mp["name"]`
+
+	p.error_with_pos('prefix `${op}${expr}` is unsupported, use suffix form `${expr}${op}`',
+		full_expr_pos)
+}
+
+// process_custom_orm_operators checks whether a word in infix expressions is an ORM operator.
+// If it is, then a new kind is assigned to it, so that the parser will process it as a keyword.
+// This is necessary to ensure that parts of the ORM expression do not function
+// outside of the ORM and are not recognized as keywords in the language.
+// For example, there is a `like` operator in ORM, which should be used
+// in expressions like `name like 'M%'`, but it should not be used in V directly.
+[inline]
+fn (mut p Parser) process_custom_orm_operators() {
+	if !p.inside_orm {
+		return
+	}
+
+	is_like_operator := p.tok.kind == .name && p.tok.lit == 'like'
+
+	if is_like_operator {
+		p.tok = token.Token{
+			...p.tok
+			kind: .key_like
+		}
+	}
 }

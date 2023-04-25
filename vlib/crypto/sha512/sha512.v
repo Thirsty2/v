@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 // Package sha512 implements the SHA-384, SHA-512, SHA-512/224, and SHA-512/256
@@ -70,9 +70,26 @@ mut:
 	function crypto.Hash
 }
 
-fn (mut d Digest) reset() {
+// free the resources taken by the Digest `d`
+[unsafe]
+pub fn (mut d Digest) free() {
+	$if prealloc {
+		return
+	}
+	unsafe {
+		d.x.free()
+		d.h.free()
+	}
+}
+
+fn (mut d Digest) init() {
 	d.h = []u64{len: (8)}
 	d.x = []u8{len: sha512.chunk}
+	d.reset()
+}
+
+// reset the state of the Digest `d`
+pub fn (mut d Digest) reset() {
 	match d.function {
 		.sha384 {
 			d.h[0] = sha512.init0_384
@@ -124,7 +141,7 @@ fn new_digest(hash crypto.Hash) &Digest {
 	mut d := &Digest{
 		function: hash
 	}
-	d.reset()
+	d.init()
 	return d
 }
 

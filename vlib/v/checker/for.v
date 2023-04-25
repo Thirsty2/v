@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module checker
 
@@ -14,10 +14,16 @@ fn (mut c Checker) for_c_stmt(node ast.ForCStmt) {
 	c.expr(node.cond)
 	if node.has_inc {
 		if node.inc is ast.AssignStmt {
-			for right in node.inc.right {
+			assign := node.inc
+
+			if assign.op == .decl_assign {
+				c.error('for loop post statement cannot be a variable declaration', assign.pos)
+			}
+
+			for right in assign.right {
 				if right is ast.CallExpr {
 					if right.or_block.stmts.len > 0 {
-						c.error('optionals are not allowed in `for statement increment` (yet)',
+						c.error('options are not allowed in `for statement increment` (yet)',
 							right.pos)
 					}
 				}
@@ -34,8 +40,7 @@ fn (mut c Checker) for_c_stmt(node ast.ForCStmt) {
 fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 	c.in_for_count++
 	prev_loop_label := c.loop_label
-	typ := c.expr(node.cond)
-	typ_idx := typ.idx()
+	mut typ := c.expr(node.cond)
 	if node.key_var.len > 0 && node.key_var != '_' {
 		c.check_valid_snake_case(node.key_var, 'variable name', node.pos)
 		if reserved_type_names_chk.matches(node.key_var) {
@@ -49,6 +54,7 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 		}
 	}
 	if node.is_range {
+		typ_idx := typ.idx()
 		high_type := c.expr(node.high)
 		high_type_idx := high_type.idx()
 		if typ_idx in ast.integer_type_idxs && high_type_idx !in ast.integer_type_idxs
@@ -60,6 +66,12 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 			c.error('range type can not be bool', node.cond.pos())
 		} else if typ_idx == ast.string_type_idx || high_type_idx == ast.string_type_idx {
 			c.error('range type can not be string', node.cond.pos())
+		} else if typ_idx == ast.none_type_idx || high_type_idx == ast.none_type_idx {
+			c.error('range type can not be none', node.cond.pos())
+		} else if c.table.final_sym(typ).kind == .multi_return
+			&& c.table.final_sym(high_type).kind == .multi_return {
+			c.error('multi-returns cannot be used in ranges. A range is from a single value to a single higher value.',
+				node.cond.pos())
 		}
 		if high_type in [ast.int_type, ast.int_literal_type] {
 			node.val_type = typ
@@ -69,11 +81,28 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 		node.high_type = high_type
 		node.scope.update_var_type(node.val_var, node.val_type)
 	} else {
-		sym := c.table.final_sym(typ)
+		mut is_comptime := false
+		if (node.cond is ast.Ident && c.is_comptime_var(node.cond))
+			|| node.cond is ast.ComptimeSelector {
+			ctyp := c.get_comptime_var_type(node.cond)
+			if ctyp != ast.void_type {
+				is_comptime = true
+				typ = ctyp
+			}
+		}
+
+		mut sym := c.table.final_sym(typ)
 		if sym.kind != .string {
 			match mut node.cond {
 				ast.PrefixExpr {
 					node.val_is_ref = node.cond.op == .amp
+				}
+				ast.ComptimeSelector {
+					comptime_typ := c.get_comptime_selector_type(node.cond, ast.void_type)
+					if comptime_typ != ast.void_type {
+						sym = c.table.final_sym(comptime_typ)
+						typ = comptime_typ
+					}
 				}
 				ast.Ident {
 					match mut node.cond.info {
@@ -85,6 +114,9 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 				}
 				else {}
 			}
+		} else if node.val_is_mut {
+			c.error('string type is immutable, it cannot be changed', node.pos)
+			return
 		}
 		if sym.kind == .struct_ {
 			// iterators
@@ -92,8 +124,8 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 				c.error('a struct must have a `next()` method to be an iterator', node.cond.pos())
 				return
 			}
-			if !next_fn.return_type.has_flag(.optional) {
-				c.error('iterator method `next()` must return an optional', node.cond.pos())
+			if !next_fn.return_type.has_flag(.option) {
+				c.error('iterator method `next()` must return an Option', node.cond.pos())
 			}
 			return_sym := c.table.sym(next_fn.return_type)
 			if return_sym.kind == .multi_return {
@@ -103,7 +135,7 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 			if next_fn.params.len != 1 {
 				c.error('iterator method `next()` must have 0 parameters', node.cond.pos())
 			}
-			mut val_type := next_fn.return_type.clear_flag(.optional).clear_flag(.result)
+			mut val_type := next_fn.return_type.clear_flags(.option, .result)
 			if node.val_is_mut {
 				val_type = val_type.ref()
 			}
@@ -111,8 +143,15 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 			node.kind = sym.kind
 			node.val_type = val_type
 			node.scope.update_var_type(node.val_var, val_type)
-		} else if sym.kind == .string && node.val_is_mut {
-			c.error('string type is immutable, it cannot be changed', node.pos)
+
+			if is_comptime {
+				c.comptime_fields_type[node.val_var] = val_type
+				node.scope.update_ct_var_kind(node.val_var, .value_var)
+
+				defer {
+					c.comptime_fields_type.delete(node.val_var)
+				}
+			}
 		} else if sym.kind == .any {
 			node.cond_type = typ
 			node.kind = sym.kind
@@ -127,13 +166,28 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 				}
 				node.key_type = key_type
 				node.scope.update_var_type(node.key_var, key_type)
+
+				if is_comptime {
+					c.comptime_fields_type[node.key_var] = key_type
+					node.scope.update_ct_var_kind(node.key_var, .key_var)
+
+					defer {
+						c.comptime_fields_type.delete(node.key_var)
+					}
+				}
 			}
 
 			value_type := c.table.value_type(unwrapped_typ)
 			node.scope.update_var_type(node.val_var, value_type)
 
-			c.inside_for_in_any_cond = true
-			c.for_in_any_val_type = value_type
+			if is_comptime {
+				c.comptime_fields_type[node.val_var] = value_type
+				node.scope.update_ct_var_kind(node.val_var, .value_var)
+
+				defer {
+					c.comptime_fields_type.delete(node.val_var)
+				}
+			}
 		} else {
 			if sym.kind == .map && !(node.key_var.len > 0 && node.val_var.len > 0) {
 				c.error(
@@ -147,12 +201,21 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 				}
 				node.key_type = key_type
 				node.scope.update_var_type(node.key_var, key_type)
+
+				if is_comptime {
+					c.comptime_fields_type[node.key_var] = key_type
+					node.scope.update_ct_var_kind(node.key_var, .key_var)
+
+					defer {
+						c.comptime_fields_type.delete(node.key_var)
+					}
+				}
 			}
 			mut value_type := c.table.value_type(typ)
 			if sym.kind == .string {
 				value_type = ast.u8_type
 			}
-			if value_type == ast.void_type || typ.has_flag(.optional) || typ.has_flag(.result) {
+			if value_type == ast.void_type || typ.has_flag(.result) {
 				if typ != ast.void_type {
 					c.error('for in: cannot index `${c.table.type_to_str(typ)}`', node.cond.pos())
 				}
@@ -175,11 +238,15 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 						c.error('map literal is immutable, it cannot be changed', node.cond.pos)
 					}
 					ast.SelectorExpr {
-						root_ident := node.cond.root_ident() or { node.cond.expr as ast.Ident }
-						if root_ident.kind != .unresolved {
-							if !(root_ident.obj as ast.Var).is_mut {
-								c.error('field `${node.cond.field_name}` is immutable, it cannot be changed',
-									node.cond.pos)
+						if root_ident := node.cond.root_ident() {
+							if root_ident.kind != .unresolved {
+								if var := node.scope.find_var(root_ident.name) {
+									if !var.is_mut {
+										sym2 := c.table.sym(root_ident.obj.typ)
+										c.error('field `${sym2.name}.${node.cond.field_name}` is immutable, it cannot be changed',
+											node.cond.pos)
+									}
+								}
 							}
 						}
 					}
@@ -192,13 +259,19 @@ fn (mut c Checker) for_in_stmt(mut node ast.ForInStmt) {
 			node.kind = sym.kind
 			node.val_type = value_type
 			node.scope.update_var_type(node.val_var, value_type)
+			if is_comptime {
+				c.comptime_fields_type[node.val_var] = value_type
+				node.scope.update_ct_var_kind(node.val_var, .value_var)
+
+				defer {
+					c.comptime_fields_type.delete(node.val_var)
+				}
+			}
 		}
 	}
 	c.check_loop_label(node.label, node.pos)
 	c.stmts(node.stmts)
 	c.loop_label = prev_loop_label
-	c.inside_for_in_any_cond = false
-	c.for_in_any_val_type = 0
 	c.in_for_count--
 }
 

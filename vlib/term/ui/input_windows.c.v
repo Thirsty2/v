@@ -8,7 +8,7 @@ import time
 
 const buf_size = 64
 
-const ctx_ptr = &Context(0)
+const ctx_ptr = &Context(unsafe { nil })
 
 const stdin_at_startup = u32(0)
 
@@ -34,6 +34,7 @@ fn restore_terminal_state() {
 	os.flush()
 }
 
+// init initializes the context of a windows console given the `cfg`.
 pub fn init(cfg Config) &Context {
 	mut ctx := &Context{
 		cfg: cfg
@@ -99,6 +100,7 @@ pub fn init(cfg Config) &Context {
 	return ctx
 }
 
+// run starts the windows console or restarts if it was paused.
 pub fn (mut ctx Context) run() ? {
 	frame_time := 1_000_000 / ctx.cfg.frame_rate
 	mut init_called := false
@@ -172,7 +174,7 @@ fn (mut ctx Context) parse_events() {
 					else { unsafe { KeyCode(ascii) } }
 				}
 
-				mut modifiers := Modifiers{}
+				mut modifiers := Modifiers.ctrl
 				if e.dwControlKeyState & (0x1 | 0x2) != 0 {
 					modifiers.set(.alt)
 				}
@@ -202,7 +204,7 @@ fn (mut ctx Context) parse_events() {
 				}
 				x := e.dwMousePosition.X + 1
 				y := int(e.dwMousePosition.Y) - sb_info.srWindow.Top + 1
-				mut modifiers := Modifiers{}
+				mut modifiers := Modifiers.ctrl
 				if e.dwControlKeyState & (0x1 | 0x2) != 0 {
 					modifiers.set(.alt)
 				}

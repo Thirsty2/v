@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module parser
@@ -121,10 +121,12 @@ fn (mut p Parser) for_stmt() ast.Stmt {
 					val_var_pos)
 			}
 			if p.scope.known_var(key_var_name) {
-				return p.error('redefinition of key iteration variable `${key_var_name}`')
+				return p.error_with_pos('redefinition of key iteration variable `${key_var_name}`',
+					key_var_pos)
 			}
 			if p.scope.known_var(val_var_name) {
-				return p.error('redefinition of value iteration variable `${val_var_name}`')
+				return p.error_with_pos('redefinition of value iteration variable `${val_var_name}`',
+					val_var_pos)
 			}
 			p.scope.register(ast.Var{
 				name: key_var_name
@@ -150,7 +152,10 @@ fn (mut p Parser) for_stmt() ast.Stmt {
 		// TODO use RangeExpr
 		mut high_expr := ast.empty_expr
 		mut is_range := false
-		if p.tok.kind == .dotdot {
+		if p.tok.kind == .ellipsis {
+			p.error_with_pos('for loop only supports exclusive (`..`) ranges, not inclusive (`...`)',
+				p.tok.pos())
+		} else if p.tok.kind == .dotdot {
 			is_range = true
 			p.next()
 			high_expr = p.expr(0)

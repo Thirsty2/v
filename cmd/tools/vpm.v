@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module main
@@ -9,7 +9,7 @@ import os.cmdline
 import net.http
 import net.urllib
 import json
-import vhelp
+import v.help
 import v.vmod
 
 const (
@@ -139,7 +139,7 @@ fn main() {
 fn vpm_search(keywords []string) {
 	search_keys := keywords.map(it.replace('_', '-'))
 	if settings.is_help {
-		vhelp.show_topic('search')
+		help.print_and_exit('search')
 		exit(0)
 	}
 	if search_keys.len == 0 {
@@ -301,37 +301,39 @@ fn vpm_install_from_vcs(module_names []string, vcs_key string) {
 		vmod_path := os.join_path(final_module_path, 'v.mod')
 		if os.exists(vmod_path) {
 			data := os.read_file(vmod_path) or { return }
-			vmod := parse_vmod(data) or {
+			vmod_ := parse_vmod(data) or {
 				eprintln(err)
 				return
 			}
-			minfo := mod_name_info(vmod.name)
-			println('Relocating module from "${name}" to "${vmod.name}" ( "${minfo.final_module_path}" ) ...')
-			if os.exists(minfo.final_module_path) {
-				eprintln('Warning module "${minfo.final_module_path}" already exsits!')
-				eprintln('Removing module "${minfo.final_module_path}" ...')
-				os.rmdir_all(minfo.final_module_path) or {
-					errors++
-					println('Errors while removing "${minfo.final_module_path}" :')
-					println(err)
-					continue
+			minfo := mod_name_info(vmod_.name)
+			if final_module_path != minfo.final_module_path {
+				println('Relocating module from "${name}" to "${vmod_.name}" ( "${minfo.final_module_path}" ) ...')
+				if os.exists(minfo.final_module_path) {
+					eprintln('Warning module "${minfo.final_module_path}" already exsits!')
+					eprintln('Removing module "${minfo.final_module_path}" ...')
+					os.rmdir_all(minfo.final_module_path) or {
+						errors++
+						println('Errors while removing "${minfo.final_module_path}" :')
+						println(err)
+						continue
+					}
 				}
-			}
-			os.mv(final_module_path, minfo.final_module_path) or {
-				errors++
-				eprintln('Errors while relocating module "${name}" :')
-				eprintln(err)
-				os.rmdir_all(final_module_path) or {
+				os.mv(final_module_path, minfo.final_module_path) or {
 					errors++
-					eprintln('Errors while removing "${final_module_path}" :')
+					eprintln('Errors while relocating module "${name}" :')
 					eprintln(err)
+					os.rmdir_all(final_module_path) or {
+						errors++
+						eprintln('Errors while removing "${final_module_path}" :')
+						eprintln(err)
+						continue
+					}
 					continue
 				}
-				continue
+				println('Module "${name}" relocated to "${vmod_.name}" successfully.')
+				final_module_path = minfo.final_module_path
 			}
-			println('Module "${name}" relocated to "${vmod.name}" successfully.')
-			final_module_path = minfo.final_module_path
-			name = vmod.name
+			name = vmod_.name
 		}
 		resolve_dependencies(name, final_module_path, module_names)
 	}
@@ -353,7 +355,7 @@ fn vpm_once_filter(module_names []string) []string {
 
 fn vpm_install(module_names []string, source Source) {
 	if settings.is_help {
-		vhelp.show_topic('install')
+		help.print_and_exit('install')
 		exit(0)
 	}
 	if module_names.len == 0 {
@@ -376,7 +378,7 @@ fn vpm_install(module_names []string, source Source) {
 fn vpm_update(m []string) {
 	mut module_names := m.clone()
 	if settings.is_help {
-		vhelp.show_topic('update')
+		help.print_and_exit('update')
 		exit(0)
 	}
 	if module_names.len == 0 {
@@ -412,7 +414,7 @@ fn vpm_update(m []string) {
 	}
 }
 
-fn get_outdated() ?[]string {
+fn get_outdated() ![]string {
 	module_names := get_installed_modules()
 	mut outdated := []string{}
 	for name in module_names {
@@ -477,7 +479,7 @@ fn vpm_list() {
 
 fn vpm_remove(module_names []string) {
 	if settings.is_help {
-		vhelp.show_topic('remove')
+		help.print_and_exit('remove')
 		exit(0)
 	}
 	if module_names.len == 0 {
@@ -532,7 +534,7 @@ fn ensure_vmodules_dir_exist() {
 }
 
 fn vpm_help() {
-	vhelp.show_topic('vpm')
+	help.print_and_exit('vpm')
 }
 
 fn vcs_used_in_dir(dir string) ?[]string {
@@ -644,13 +646,13 @@ fn resolve_dependencies(name string, module_path string, module_names []string) 
 		return
 	}
 	data := os.read_file(vmod_path) or { return }
-	vmod := parse_vmod(data) or {
+	vmod_ := parse_vmod(data) or {
 		eprintln(err)
 		return
 	}
 	mut deps := []string{}
 	// filter out dependencies that were already specified by the user
-	for d in vmod.deps {
+	for d in vmod_.deps {
 		if d !in module_names {
 			deps << d
 		}
@@ -664,11 +666,11 @@ fn resolve_dependencies(name string, module_path string, module_names []string) 
 
 fn parse_vmod(data string) !Vmod {
 	manifest := vmod.decode(data) or { return error('Parsing v.mod file failed, ${err}') }
-	mut vmod := Vmod{}
-	vmod.name = manifest.name
-	vmod.version = manifest.version
-	vmod.deps = manifest.dependencies
-	return vmod
+	mut vmod_ := Vmod{}
+	vmod_.name = manifest.name
+	vmod_.version = manifest.version
+	vmod_.deps = manifest.dependencies
+	return vmod_
 }
 
 fn get_working_server_url() string {
@@ -702,7 +704,7 @@ const (
 )
 
 fn init_settings() {
-	mut s := &VpmSettings(0)
+	mut s := &VpmSettings(unsafe { nil })
 	unsafe {
 		s = settings
 	}
@@ -718,7 +720,7 @@ fn verbose_println(s string) {
 	}
 }
 
-fn get_mod_by_url(name string) ?Mod {
+fn get_mod_by_url(name string) !Mod {
 	if purl := urllib.parse(name) {
 		verbose_println('purl: ${purl}')
 		mod := Mod{
@@ -731,7 +733,7 @@ fn get_mod_by_url(name string) ?Mod {
 	return error('invalid url: ${name}')
 }
 
-fn get_module_meta_info(name string) ?Mod {
+fn get_module_meta_info(name string) !Mod {
 	if mod := get_mod_by_url(name) {
 		return mod
 	}

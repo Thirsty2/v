@@ -14,6 +14,7 @@ pub struct TcpConn {
 pub mut:
 	sock TcpSocket
 mut:
+	handle         int
 	write_deadline time.Time
 	read_deadline  time.Time
 	read_timeout   time.Duration
@@ -108,7 +109,8 @@ pub fn (c TcpConn) read_ptr(buf_ptr &u8, len int) !int {
 	}
 	if res > 0 {
 		$if trace_tcp_data_read ? {
-			eprintln('<<< TcpConn.read_ptr  | 1 data.len: ${res:6} | data: ' +
+			eprintln(
+				'<<< TcpConn.read_ptr  | 1 data.len: ${res:6} | hex: ${unsafe { buf_ptr.vbytes(res) }.hex()} | data: ' +
 				unsafe { buf_ptr.vstring_with_len(res) })
 		}
 		return res
@@ -122,7 +124,8 @@ pub fn (c TcpConn) read_ptr(buf_ptr &u8, len int) !int {
 		}
 		$if trace_tcp_data_read ? {
 			if res > 0 {
-				eprintln('<<< TcpConn.read_ptr  | 2 data.len: ${res:6} | data: ' +
+				eprintln(
+					'<<< TcpConn.read_ptr  | 2 data.len: ${res:6} | hex: ${unsafe { buf_ptr.vbytes(res) }.hex()} | data: ' +
 					unsafe { buf_ptr.vstring_with_len(res) })
 			}
 		}
@@ -151,13 +154,17 @@ pub fn (mut c TcpConn) read_deadline() !time.Time {
 
 // write_ptr blocks and attempts to write all data
 pub fn (mut c TcpConn) write_ptr(b &u8, len int) !int {
+	$if trace_tcp_sock_handle ? {
+		eprintln('>>> TcpConn.write_ptr | c: ${ptr_str(c)} | c.sock.handle: ${c.sock.handle} | b: ${ptr_str(b)} | len: ${len}')
+	}
 	$if trace_tcp ? {
 		eprintln(
 			'>>> TcpConn.write_ptr | c.sock.handle: ${c.sock.handle} | b: ${ptr_str(b)} len: ${len} |\n' +
 			unsafe { b.vstring_with_len(len) })
 	}
 	$if trace_tcp_data_write ? {
-		eprintln('>>> TcpConn.write_ptr | data.len: ${len:6} | data: ' +
+		eprintln(
+			'>>> TcpConn.write_ptr | data.len: ${len:6} | hex: ${unsafe { b.vbytes(len) }.hex()} | data: ' +
 			unsafe { b.vstring_with_len(len) })
 	}
 	unsafe {
@@ -168,7 +175,7 @@ pub fn (mut c TcpConn) write_ptr(b &u8, len int) !int {
 			remaining := len - total_sent
 			mut sent := C.send(c.sock.handle, ptr, remaining, msg_nosignal)
 			$if trace_tcp_data_write ? {
-				eprintln('>>> TcpConn.write_ptr | data chunk, total_sent: ${total_sent:6}, chunk_size: ${chunk_size:6}, sent: ${sent:6}, ptr: ${ptr_str(ptr)}')
+				eprintln('>>> TcpConn.write_ptr | data chunk, total_sent: ${total_sent:6}, remaining: ${remaining:6}, ptr: ${voidptr(ptr):x} => sent: ${sent:6}')
 			}
 			if sent < 0 {
 				code := error_code()
@@ -236,6 +243,15 @@ pub fn (mut c TcpConn) wait_for_write() ! {
 	return wait_for_write(c.sock.handle, c.write_deadline, c.write_timeout)
 }
 
+// set_sock initialises the c.sock field. It should be called after `.accept_only()!`.
+// Note: just use `.accept()!`. In most cases it is simpler, and calls `.set_sock()!` for you.
+pub fn (mut c TcpConn) set_sock() ! {
+	c.sock = tcp_socket_from_handle(c.handle)!
+	$if trace_tcp ? {
+		eprintln('    TcpListener.accept | << new_sock.handle: ${c.handle:6}')
+	}
+}
+
 pub fn (c &TcpConn) peer_addr() !Addr {
 	mut addr := Addr{
 		addr: AddrData{
@@ -289,10 +305,32 @@ pub fn listen_tcp(family AddrFamily, saddr string) !&TcpListener {
 	}
 }
 
+// accept a tcp connection from an external source to the listener `l`.
 pub fn (mut l TcpListener) accept() !&TcpConn {
+	mut res := l.accept_only()!
+	res.set_sock()!
+	return res
+}
+
+// accept_only accepts a tcp connection from an external source to the listener `l`.
+// Unlike `accept`, `accept_only` *will not call* `.set_sock()!` on the result,
+// and is thus faster.
+//
+// Note: you *need* to call `.set_sock()!` manually, before using the
+// connection after calling `.accept_only()!`, but that does not have to happen
+// in the same thread that called `.accept_only()!`.
+// The intention of this API, is to have a more efficient way to accept
+// connections, that are later processed by a thread pool, while the main
+// thread remains active, so that it can accept other connections.
+// See also vlib/vweb/vweb.v .
+//
+// If you do not need that, just call `.accept()!` instead, which will call
+// `.set_sock()!` for you.
+pub fn (mut l TcpListener) accept_only() !&TcpConn {
 	$if trace_tcp ? {
 		eprintln('    TcpListener.accept | l.sock.handle: ${l.sock.handle:6}')
 	}
+
 	mut new_handle := C.accept(l.sock.handle, 0, 0)
 	if new_handle <= 0 {
 		l.wait_for_accept()!
@@ -301,12 +339,9 @@ pub fn (mut l TcpListener) accept() !&TcpConn {
 			return error('accept failed')
 		}
 	}
-	new_sock := tcp_socket_from_handle(new_handle)!
-	$if trace_tcp ? {
-		eprintln('    TcpListener.accept | << new_sock.handle: ${new_sock.handle:6}')
-	}
+
 	return &TcpConn{
-		sock: new_sock
+		handle: new_handle
 		read_timeout: net.tcp_default_read_timeout
 		write_timeout: net.tcp_default_write_timeout
 	}
@@ -448,7 +483,8 @@ pub fn (mut s TcpSocket) bind(addr string) ! {
 }
 
 fn (mut s TcpSocket) close() ! {
-	return shutdown(s.handle)
+	shutdown(s.handle)
+	return close(s.handle)
 }
 
 fn (mut s TcpSocket) @select(test Select, timeout time.Duration) !bool {

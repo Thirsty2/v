@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module native
@@ -78,7 +78,7 @@ fn (mut g Gen) comptime_is_truthy(cond ast.Expr) bool {
 	return false
 }
 
-fn (mut g Gen) comptime_ident(name string, is_comptime_optional bool) bool {
+fn (mut g Gen) comptime_ident(name string, is_comptime_option bool) bool {
 	return match name {
 		//
 		// Operating systems
@@ -204,7 +204,7 @@ fn (mut g Gen) comptime_ident(name string, is_comptime_optional bool) bool {
 			g.pref.is_script
 		}
 		else {
-			if is_comptime_optional
+			if is_comptime_option
 				|| (g.pref.compile_defines_all.len > 0 && name in g.pref.compile_defines_all) {
 				true
 			} else {

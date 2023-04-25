@@ -2,7 +2,7 @@ module main
 
 import vweb
 import time
-import sqlite
+import db.sqlite
 
 struct App {
 	vweb.Context
@@ -44,7 +44,7 @@ pub fn (mut app App) new_article() vweb.Result {
 	println(article)
 	sql app.db {
 		insert article into Article
-	}
+	} or {}
 
 	return app.redirect('/')
 }
@@ -65,13 +65,13 @@ fn (mut app App) time_json_pretty() {
 	})
 }
 
-struct ApiSuccessResponse<T> {
+struct ApiSuccessResponse[T] {
 	success bool
 	result  T
 }
 
-fn (mut app App) json_success<T>(result T) vweb.Result {
-	response := ApiSuccessResponse<T>{
+fn (mut app App) json_success[T](result T) vweb.Result {
+	response := ApiSuccessResponse[T]{
 		success: true
 		result: result
 	}
@@ -80,8 +80,8 @@ fn (mut app App) json_success<T>(result T) vweb.Result {
 }
 
 // should compile, this is a helper method, not exposed as a route
-fn (mut app App) some_helper<T>(result T) ApiSuccessResponse<T> {
-	response := ApiSuccessResponse<T>{
+fn (mut app App) some_helper[T](result T) ApiSuccessResponse[T] {
+	response := ApiSuccessResponse[T]{
 		success: true
 		result: result
 	}

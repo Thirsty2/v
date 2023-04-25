@@ -221,11 +221,8 @@ pub fn (m map[string]Any) as_strings() map[string]string {
 pub fn (m map[string]Any) to_toml() string {
 	mut toml_text := ''
 	for k, v in m {
-		mut key := k
-		if key.contains(' ') {
-			key = '"${key}"'
-		}
-		toml_text += '${key} = ' + v.to_toml() + '\n'
+		key := if k.contains(' ') { '"${k}"' } else { k }
+		toml_text += '${key} = ${v.to_toml()}\n'
 	}
 	toml_text = toml_text.trim_right('\n')
 	return toml_text
@@ -235,12 +232,12 @@ pub fn (m map[string]Any) to_toml() string {
 // as an inline table encoded TOML `string`.
 pub fn (m map[string]Any) to_inline_toml() string {
 	mut toml_text := '{'
+	mut i := 1
 	for k, v in m {
-		mut key := k
-		if key.contains(' ') {
-			key = '"${key}"'
-		}
-		toml_text += ' ${key} = ' + v.to_toml() + ','
+		key := if k.contains(' ') { '"${k}"' } else { k }
+		delimeter := if i < m.len { ',' } else { '' }
+		toml_text += ' ${key} = ${v.to_toml()}${delimeter}'
+		i++
 	}
 	return toml_text + ' }'
 }
@@ -285,7 +282,9 @@ pub fn (a Any) value(key string) Any {
 	return a.value_(a, key_split)
 }
 
-pub fn (a Any) value_opt(key string) ?Any {
+// value_opt queries a value from the current element's tree. Returns an error
+// if the key is not valid or there is no value for the key.
+pub fn (a Any) value_opt(key string) !Any {
 	key_split := parse_dotted_key(key) or { return error('invalid dotted key') }
 	x := a.value_(a, key_split)
 	if x is Null {
@@ -327,7 +326,7 @@ fn (a Any) value_(value Any, key []string) Any {
 
 // reflect returns `T` with `T.<field>`'s value set to the
 // value of any 1st level TOML key by the same name.
-pub fn (a Any) reflect<T>() T {
+pub fn (a Any) reflect[T]() T {
 	mut reflected := T{}
 	$for field in T.fields {
 		mut toml_field_name := field.name

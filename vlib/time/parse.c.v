@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2023 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module time
@@ -70,6 +70,9 @@ pub fn parse(s string) !Time {
 	}
 	shms := s[pos..]
 	hms := shms.split(':')
+	if hms.len != 3 {
+		return error_invalid_time(9)
+	}
 	hour_ := hms[0][1..]
 	minute_ := hms[1]
 	second_ := hms[2]
